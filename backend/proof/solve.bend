@@ -332,7 +332,7 @@ def trivial_valid(inst, e):
   +p = P.Plan.trivial(inst)
   +x = P.Plan.placed(p)
   +j = T.Instance.jobs(inst)
-  PP.valid_intro(inst, p, e, PJ.same_sort_intro(x, j, e, agree_trivial(J.sort(x), inst), agree_trivial(j, inst)), {==}, {==})
+  PP.valid_intro(inst, p, e, PJ.same_sort_intro(x, j, PP.ok_rising(inst, e), agree_trivial(J.sort(x), inst), agree_trivial(j, inst)), {==}, {==})
 
 law publish_go:
   for +c: Bool

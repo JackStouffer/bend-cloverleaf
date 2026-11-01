@@ -54,13 +54,16 @@ law app_refl:
 
 def app_refl(a):
   match a:
-    case T.Appraisal{i, s, z, d, m}:
-      L.and_i(Nat.is_eq(i, i), Bool.and(T.Point.is_eq(s, s),
-        Bool.and(Nat.is_eq(z, z), Bool.and(Nat.is_eq(d, d), Nat.is_eq(m, m)))), L.eq_refl(i),
-      L.and_i(T.Point.is_eq(s, s), Bool.and(Nat.is_eq(z, z), Bool.and(Nat.is_eq(d, d), Nat.is_eq(m, m))),
-        point_refl(s),
-      L.and_i(Nat.is_eq(z, z), Bool.and(Nat.is_eq(d, d), Nat.is_eq(m, m)), L.eq_refl(z),
-      L.and_i(Nat.is_eq(d, d), Nat.is_eq(m, m), L.eq_refl(d), L.eq_refl(m)))))
+    case T.Appraisal{i, s, z, d, m, t}:
+      +r4 = Bool.and(Nat.is_eq(m, m), Nat.is_eq(t, t))
+      +r3 = Bool.and(Nat.is_eq(d, d), r4)
+      +r2 = Bool.and(Nat.is_eq(z, z), r3)
+      +r1 = Bool.and(T.Point.is_eq(s, s), r2)
+      L.and_i(Nat.is_eq(i, i), r1, L.eq_refl(i),
+      L.and_i(T.Point.is_eq(s, s), r2, point_refl(s),
+      L.and_i(Nat.is_eq(z, z), r3, L.eq_refl(z),
+      L.and_i(Nat.is_eq(d, d), r4, L.eq_refl(d),
+      L.and_i(Nat.is_eq(m, m), Nat.is_eq(t, t), L.eq_refl(m), L.eq_refl(t))))))
 
 law app_of.go:
   for +i1: Nat
@@ -73,19 +76,23 @@ law app_of.go:
   for +d2: Nat
   for +m1: Nat
   for +m2: Nat
+  for +t1: Nat
+  for +t2: Nat
   for +ei: {i1 == i2 : Nat}
   for +es: {s1 == s2 : T.Point}
   for +ez: {z1 == z2 : Nat}
   for +ed: {d1 == d2 : Nat}
   for +em: {m1 == m2 : Nat}
-  {T.Appraisal{i1, s1, z1, d1, m1} == T.Appraisal{i2, s2, z2, d2, m2} : T.Appraisal}
+  for +et: {t1 == t2 : Nat}
+  {T.Appraisal{i1, s1, z1, d1, m1, t1} == T.Appraisal{i2, s2, z2, d2, m2, t2} : T.Appraisal}
 
-def app_of.go(i1, i2, s1, s2, z1, z2, d1, d2, m1, m2, ei, es, ez, ed, em):
-  %ei : {T.Appraisal{i1, s1, z1, d1, m1} == T.Appraisal{_, s2, z2, d2, m2} : T.Appraisal}
-  %es : {T.Appraisal{i1, s1, z1, d1, m1} == T.Appraisal{i1, _, z2, d2, m2} : T.Appraisal}
-  %ez : {T.Appraisal{i1, s1, z1, d1, m1} == T.Appraisal{i1, s1, _, d2, m2} : T.Appraisal}
-  %ed : {T.Appraisal{i1, s1, z1, d1, m1} == T.Appraisal{i1, s1, z1, _, m2} : T.Appraisal}
-  %em : {T.Appraisal{i1, s1, z1, d1, m1} == T.Appraisal{i1, s1, z1, d1, _} : T.Appraisal}
+def app_of.go(i1, i2, s1, s2, z1, z2, d1, d2, m1, m2, t1, t2, ei, es, ez, ed, em, et):
+  %ei : {T.Appraisal{i1, s1, z1, d1, m1, t1} == T.Appraisal{_, s2, z2, d2, m2, t2} : T.Appraisal}
+  %es : {T.Appraisal{i1, s1, z1, d1, m1, t1} == T.Appraisal{i1, _, z2, d2, m2, t2} : T.Appraisal}
+  %ez : {T.Appraisal{i1, s1, z1, d1, m1, t1} == T.Appraisal{i1, s1, _, d2, m2, t2} : T.Appraisal}
+  %ed : {T.Appraisal{i1, s1, z1, d1, m1, t1} == T.Appraisal{i1, s1, z1, _, m2, t2} : T.Appraisal}
+  %em : {T.Appraisal{i1, s1, z1, d1, m1, t1} == T.Appraisal{i1, s1, z1, d1, _, t2} : T.Appraisal}
+  %et : {T.Appraisal{i1, s1, z1, d1, m1, t1} == T.Appraisal{i1, s1, z1, d1, m1, _} : T.Appraisal}
   {==}
 
 law app_of:
@@ -96,19 +103,22 @@ law app_of:
 
 def app_of(a, b, e):
   match a b:
-    case T.Appraisal{i1, s1, z1, d1, m1} T.Appraisal{i2, s2, z2, d2, m2}:
-      +r1 = Bool.and(T.Point.is_eq(s1, s2), Bool.and(Nat.is_eq(z1, z2), Bool.and(Nat.is_eq(d1, d2), Nat.is_eq(m1, m2))))
-      +r2 = Bool.and(Nat.is_eq(z1, z2), Bool.and(Nat.is_eq(d1, d2), Nat.is_eq(m1, m2)))
-      +r3 = Bool.and(Nat.is_eq(d1, d2), Nat.is_eq(m1, m2))
+    case T.Appraisal{i1, s1, z1, d1, m1, t1} T.Appraisal{i2, s2, z2, d2, m2, t2}:
+      +r4 = Bool.and(Nat.is_eq(m1, m2), Nat.is_eq(t1, t2))
+      +r3 = Bool.and(Nat.is_eq(d1, d2), r4)
+      +r2 = Bool.and(Nat.is_eq(z1, z2), r3)
+      +r1 = Bool.and(T.Point.is_eq(s1, s2), r2)
       +e1 = L.and_r(Nat.is_eq(i1, i2), r1, e)
       +e2 = L.and_r(T.Point.is_eq(s1, s2), r2, e1)
       +e3 = L.and_r(Nat.is_eq(z1, z2), r3, e2)
-      app_of.go(i1, i2, s1, s2, z1, z2, d1, d2, m1, m2,
+      +e4 = L.and_r(Nat.is_eq(d1, d2), r4, e3)
+      app_of.go(i1, i2, s1, s2, z1, z2, d1, d2, m1, m2, t1, t2,
         L.eq_of(i1, i2, L.and_l(Nat.is_eq(i1, i2), r1, e)),
         point_of(s1, s2, L.and_l(T.Point.is_eq(s1, s2), r2, e1)),
         L.eq_of(z1, z2, L.and_l(Nat.is_eq(z1, z2), r3, e2)),
-        L.eq_of(d1, d2, L.and_l(Nat.is_eq(d1, d2), Nat.is_eq(m1, m2), e3)),
-        L.eq_of(m1, m2, L.and_r(Nat.is_eq(d1, d2), Nat.is_eq(m1, m2), e3)))
+        L.eq_of(d1, d2, L.and_l(Nat.is_eq(d1, d2), r4, e3)),
+        L.eq_of(m1, m2, L.and_l(Nat.is_eq(m1, m2), Nat.is_eq(t1, t2), e4)),
+        L.eq_of(t1, t2, L.and_r(Nat.is_eq(m1, m2), Nat.is_eq(t1, t2), e4)))
 
 # Counting
 # --------
@@ -956,6 +966,102 @@ def rising_insert(xs, j, lo, er, el, ef):
           %Equal.sym(List<&2, T.Appraisal>, J.insert(h <> t, j), h <> J.insert(t, j), insert_f(h, t, j, e)) : {J.rising(_, lo) == True{} : Bool}
           L.and_i(Nat.is_le(lo, ih), J.rising(J.insert(t, j), 1n+ih), lh,
             rising_insert(t, j, 1n+ih, rt, L.le_total(ij, ih, e), ft)))
+
+# States
+# ------
+
+law in_state_put:
+  for +c: Bool
+  for +a: T.Appraisal
+  for +r: List<&2, T.Appraisal>
+  for +s: Nat
+  for +ea: {Nat.is_eq(T.Appraisal.state(a), s) == True{} : Bool}
+  for +er: {J.in_state(r, s) == True{} : Bool}
+  {J.in_state(J.without.put(c, a, r), s) == True{} : Bool}
+
+def in_state_put(c, a, r, s, ea, er):
+  match c:
+    case True{}:
+      er
+    case False{}:
+      L.and_i(Nat.is_eq(T.Appraisal.state(a), s), J.in_state(r, s), ea, er)
+
+law in_state_without:
+  for +xs: List<&2, T.Appraisal>
+  for +i: Nat
+  for +s: Nat
+  for +e: {J.in_state(xs, s) == True{} : Bool}
+  {J.in_state(J.without(xs, i), s) == True{} : Bool}
+
+def in_state_without(xs, i, s, e):
+  match xs:
+    case Nil{}:
+      {==}
+    case +h <> +t:
+      +x = Nat.is_eq(T.Appraisal.state(h), s)
+      +y = J.in_state(t, s)
+      in_state_put(Nat.is_eq(T.Appraisal.id(h), i), h, J.without(t, i), s, L.and_l(x, y, e),
+        in_state_without(t, i, s, L.and_r(x, y, e)))
+
+law in_state_insert:
+  for +xs: List<&2, T.Appraisal>
+  for +j: T.Appraisal
+  for +s: Nat
+  for +ex: {J.in_state(xs, s) == True{} : Bool}
+  for +ej: {Nat.is_eq(T.Appraisal.state(j), s) == True{} : Bool}
+  {J.in_state(J.insert(xs, j), s) == True{} : Bool}
+
+def in_state_insert(xs, j, s, ex, ej):
+  match xs:
+    case Nil{}:
+      L.and_i(Nat.is_eq(T.Appraisal.state(j), s), True{}, ej, {==})
+    case +h <> +t:
+      +x = Nat.is_eq(T.Appraisal.state(h), s)
+      +y = J.in_state(t, s)
+      L.cases(Nat.is_le(T.Appraisal.id(j), T.Appraisal.id(h)), {J.in_state(J.insert(h <> t, j), s) == True{} : Bool},
+        +e =>
+          %Equal.sym(List<&2, T.Appraisal>, J.insert(h <> t, j), j <> h <> t, insert_t(h, t, j, e)) : {J.in_state(_, s) == True{} : Bool}
+          L.and_i(Nat.is_eq(T.Appraisal.state(j), s), J.in_state(h <> t, s), ej, ex),
+        +e =>
+          %Equal.sym(List<&2, T.Appraisal>, J.insert(h <> t, j), h <> J.insert(t, j), insert_f(h, t, j, e)) : {J.in_state(_, s) == True{} : Bool}
+          L.and_i(x, J.in_state(J.insert(t, j), s), L.and_l(x, y, ex),
+            in_state_insert(t, j, s, L.and_r(x, y, ex), ej)))
+
+law count_skip:
+  for +a: T.Appraisal
+  for +h: T.Appraisal
+  for +t: List<&2, T.Appraisal>
+  for +e: {T.Appraisal.is_eq(a, h) == False{} : Bool}
+  {J.count(a, h <> t) == J.count(a, t) : Nat}
+
+def count_skip(a, h, t, e):
+  %Equal.sym(Nat, J.count.one(a, h), 0n, one_f(a, h, e)) : {Nat.add(_, J.count(a, t)) == J.count(a, t) : Nat}
+  {==}
+
+# Anything counted in a list that's all in one state is in that state.
+law state_of_count:
+  for +a: T.Appraisal
+  for +xs: List<&2, T.Appraisal>
+  for +s: Nat
+  for +ex: {J.in_state(xs, s) == True{} : Bool}
+  for +ec: {Nat.is_le(1n, J.count(a, xs)) == True{} : Bool}
+  {T.Appraisal.state(a) == s : Nat}
+
+def state_of_count(a, xs, s, ex, ec):
+  match xs:
+    case Nil{}:
+      L.never({T.Appraisal.state(a) == s : Nat}, ec)
+    case +h <> +t:
+      +x = Nat.is_eq(T.Appraisal.state(h), s)
+      +y = J.in_state(t, s)
+      L.cases(T.Appraisal.is_eq(a, h), {T.Appraisal.state(a) == s : Nat},
+        +e =>
+          %Equal.sym(T.Appraisal, a, h, app_of(a, h, e)) : {T.Appraisal.state(_) == s : Nat}
+          L.eq_of(T.Appraisal.state(h), s, L.and_l(x, y, ex)),
+        +e =>
+          state_of_count(a, t, s, L.and_r(x, y, ex),
+            %count_skip(a, h, t, e) : {Nat.is_le(1n, _) == True{} : Bool}
+            ec))
 
 # take: what's found plus what's left is the whole list
 def FC(+z: T.Appraisal, m: Maybe<&2, T.Appraisal>) -> Nat:

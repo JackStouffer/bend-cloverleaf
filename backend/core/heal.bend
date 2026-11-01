@@ -243,10 +243,10 @@ def State.plan(s: State) -> T.Plan:
       p
 
 def Instance.without(+inst: T.Instance, +i: Nat) -> T.Instance:
-  T.Instance{T.Instance.crews(inst), J.without(T.Instance.jobs(inst), i), T.Instance.cap(inst)}
+  T.Instance{T.Instance.crews(inst), J.without(T.Instance.jobs(inst), i), T.Instance.cap(inst), T.Instance.state(inst)}
 
 def Instance.with(+inst: T.Instance, +job: T.Appraisal) -> T.Instance:
-  T.Instance{T.Instance.crews(inst), J.insert(T.Instance.jobs(inst), job), T.Instance.cap(inst)}
+  T.Instance{T.Instance.crews(inst), J.insert(T.Instance.jobs(inst), job), T.Instance.cap(inst), T.Instance.state(inst)}
 
 def Plan.forget(+plan: T.Plan, +i: Nat) -> T.Plan:
   T.Plan{T.Plan.routes(plan), J.without(T.Plan.backlog(plan), i), Exceptions.without(T.Plan.exceptions(plan), i)}
@@ -262,14 +262,22 @@ def cancel.if(locked: Bool, +inst: T.Instance, +plan: T.Plan, +i: Nat) -> State:
 def cancel(+inst: T.Instance, +plan: T.Plan, +i: Nat) -> State:
   cancel.if(Routes.locks(T.Plan.routes(plan), i), inst, plan, i)
 
+def request.place(here: Bool, +inst: T.Instance, +plan: T.Plan, +job: T.Appraisal) -> State:
+  match here:
+    case True{}:
+      State{Instance.with(inst, job), T.Plan{T.Plan.routes(plan), job <> T.Plan.backlog(plan), T.Plan.exceptions(plan)}}
+    case False{}:
+      State{inst, plan}
+
 def request.if(known: Bool, +inst: T.Instance, +plan: T.Plan, +job: T.Appraisal) -> State:
   match known:
     case True{}:
       State{inst, plan}
     case False{}:
-      State{Instance.with(inst, job), T.Plan{T.Plan.routes(plan), job <> T.Plan.backlog(plan), T.Plan.exceptions(plan)}}
+      request.place(Nat.is_eq(T.Appraisal.state(job), T.Instance.state(inst)), inst, plan, job)
 
-# Retries are safe: an id already known changes nothing.
+# Retries are safe: an id already known changes nothing. A request from another
+# state changes nothing either, because it belongs to that state's instance.
 def request(+inst: T.Instance, +plan: T.Plan, +job: T.Appraisal) -> State:
   request.if(J.has_id(T.Instance.jobs(inst), T.Appraisal.id(job)), inst, plan, job)
 

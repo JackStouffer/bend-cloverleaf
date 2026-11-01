@@ -360,6 +360,9 @@ def Routes3(+inst: T.Instance, +plan: T.Plan) -> Bool:
 def Rest2(+inst: T.Instance, +plan: T.Plan) -> Bool:
   Bool.and(P.Slots.sorted(P.Routes.slots(T.Plan.routes(plan))), Routes3(inst, plan))
 
+def InState(+inst: T.Instance) -> Bool:
+  Bool.and(J.in_state(T.Instance.jobs(inst), T.Instance.state(inst)), P.Crews.in_state(T.Instance.crews(inst), T.Instance.state(inst)))
+
 def Rest1(+inst: T.Instance, +plan: T.Plan) -> Bool:
   Bool.and(P.Plan.partition_ok(inst, plan), Rest2(inst, plan))
 
@@ -371,6 +374,52 @@ law v_inst:
 
 def v_inst(inst, plan, e):
   L.and_l(P.Instance.ok(inst), Rest1(inst, plan), e)
+
+law ok_rising:
+  for +inst: T.Instance
+  for +e: {P.Instance.ok(inst) == True{} : Bool}
+  {J.rising(T.Instance.jobs(inst), 0n) == True{} : Bool}
+
+def ok_rising(inst, e):
+  L.and_l(J.rising(T.Instance.jobs(inst), 0n), InState(inst), e)
+
+law ok_jobs:
+  for +inst: T.Instance
+  for +e: {P.Instance.ok(inst) == True{} : Bool}
+  {J.in_state(T.Instance.jobs(inst), T.Instance.state(inst)) == True{} : Bool}
+
+def ok_jobs(inst, e):
+  +c = P.Crews.in_state(T.Instance.crews(inst), T.Instance.state(inst))
+  L.and_l(J.in_state(T.Instance.jobs(inst), T.Instance.state(inst)), c, L.and_r(J.rising(T.Instance.jobs(inst), 0n), InState(inst), e))
+
+law ok_crews:
+  for +inst: T.Instance
+  for +e: {P.Instance.ok(inst) == True{} : Bool}
+  {P.Crews.in_state(T.Instance.crews(inst), T.Instance.state(inst)) == True{} : Bool}
+
+def ok_crews(inst, e):
+  +c = P.Crews.in_state(T.Instance.crews(inst), T.Instance.state(inst))
+  L.and_r(J.in_state(T.Instance.jobs(inst), T.Instance.state(inst)), c, L.and_r(J.rising(T.Instance.jobs(inst), 0n), InState(inst), e))
+
+law ok_intro:
+  for +inst: T.Instance
+  for +e1: {J.rising(T.Instance.jobs(inst), 0n) == True{} : Bool}
+  for +e2: {J.in_state(T.Instance.jobs(inst), T.Instance.state(inst)) == True{} : Bool}
+  for +e3: {P.Crews.in_state(T.Instance.crews(inst), T.Instance.state(inst)) == True{} : Bool}
+  {P.Instance.ok(inst) == True{} : Bool}
+
+def ok_intro(inst, e1, e2, e3):
+  L.and_i(J.rising(T.Instance.jobs(inst), 0n), InState(inst), e1,
+    L.and_i(J.in_state(T.Instance.jobs(inst), T.Instance.state(inst)), P.Crews.in_state(T.Instance.crews(inst), T.Instance.state(inst)), e2, e3))
+
+law v_rising:
+  for +inst: T.Instance
+  for +plan: T.Plan
+  for +e: {P.Plan.valid(inst, plan) == True{} : Bool}
+  {J.rising(T.Instance.jobs(inst), 0n) == True{} : Bool}
+
+def v_rising(inst, plan, e):
+  ok_rising(inst, v_inst(inst, plan, e))
 
 law v_rest1:
   for +inst: T.Instance
@@ -484,7 +533,7 @@ def valid_edit(inst, e, plan, ev):
   +j = T.Instance.jobs(inst)
   +done = H.Routes.apply(T.Plan.routes(plan), cap, e)
   valid_intro(inst, next, v_inst(inst, plan, ev),
-    PJ.same_sort_intro(x, j, v_inst(inst, plan, ev), agree_edit(J.sort(x), inst, e, plan, ev), agree_edit(j, inst, e, plan, ev)),
+    PJ.same_sort_intro(x, j, v_rising(inst, plan, ev), agree_edit(J.sort(x), inst, e, plan, ev), agree_edit(j, inst, e, plan, ev)),
     %Equal.sym(List<&2, P.Slot>, P.Routes.slots(H.Edited.routes(done)), P.Routes.slots(T.Plan.routes(plan)), slots_apply(T.Plan.routes(plan), cap, e)) : {P.Slots.sorted(_) == True{} : Bool}
     v_slots(inst, plan, ev),
     ok_routes(T.Plan.routes(plan), crews, cap, e, v_routes(inst, plan, ev)))

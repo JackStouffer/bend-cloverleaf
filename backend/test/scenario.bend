@@ -33,15 +33,29 @@ def houston() -> T.Point:
 def near_nyc(+north: Nat) -> T.Point:
   T.Point{Nat.add(407128n, north), 740060n}
 
+# New York's FIPS code. Every scenario runs in one state, like any real instance.
+def ny() -> Nat:
+  36n
+
 def job(+id: Nat, +north: Nat, +zip: Nat, +due: Nat) -> T.Appraisal:
-  T.Appraisal{id, near_nyc(north), zip, due, 20n}
+  T.Appraisal{id, near_nyc(north), zip, due, 20n, ny()}
 
 def crew(+id: Nat, +zips: List<&2, Nat>, +max: Nat) -> T.Contractor:
-  T.Contractor{id, nyc(), zips, max, [10n, 11n]}
+  T.Contractor{id, nyc(), zips, max, [10n, 11n], ny()}
 
 def inst() -> T.Instance:
   T.Instance{[crew(1n, [100n, 101n], 480n), crew(2n, [102n], 480n)],
-    [job(1n, 100n, 100n, 10n), job(2n, 200n, 100n, 10n), job(3n, 300n, 101n, 11n), job(4n, 400n, 102n, 10n)], 60n}
+    [job(1n, 100n, 100n, 10n), job(2n, 200n, 100n, 10n), job(3n, 300n, 101n, 11n), job(4n, 400n, 102n, 10n)], 60n, ny()}
+
+# Georgia's FIPS code, for anything that belongs to another state's instance.
+def foreign_job() -> T.Appraisal:
+  T.Appraisal{9n, near_nyc(100n), 100n, 10n, 20n, 13n}
+
+def foreign_crew() -> T.Instance:
+  T.Instance{[T.Contractor{1n, nyc(), [100n], 480n, [10n], 13n}], [job(1n, 100n, 100n, 10n)], 60n, ny()}
+
+def foreign_jobs() -> T.Instance:
+  T.Instance{[crew(1n, [100n], 480n)], [foreign_job()], 60n, ny()}
 
 def tune() -> S.Tuning:
   S.Tuning.standard()
@@ -104,19 +118,19 @@ def far_job() -> T.Appraisal:
 # A crew limited to a short day, to see the planner stop at its hours.
 def short_inst() -> T.Instance:
   T.Instance{[crew(1n, [100n], 60n)], [job(1n, 100n, 100n, 20n), job(2n, 200n, 100n, 20n), job(3n, 300n, 100n, 20n), job(4n, 400n, 100n, 20n),
-    job(5n, 500n, 100n, 20n), job(6n, 600n, 100n, 20n), job(7n, 700n, 100n, 20n), job(8n, 800n, 100n, 20n)], 60n}
+    job(5n, 500n, 100n, 20n), job(6n, 600n, 100n, 20n), job(7n, 700n, 100n, 20n), job(8n, 800n, 100n, 20n)], 60n, ny()}
 
 # One day with room for about two stops, and the job due first listed last.
 def tight_inst() -> T.Instance:
-  T.Instance{[crew(1n, [100n], 60n)], [job(1n, 100n, 100n, 30n), job(2n, 200n, 100n, 30n), job(3n, 300n, 100n, 30n), job(4n, 400n, 100n, 10n)], 60n}
+  T.Instance{[crew(1n, [100n], 60n)], [job(1n, 100n, 100n, 30n), job(2n, 200n, 100n, 30n), job(3n, 300n, 100n, 30n), job(4n, 400n, 100n, 10n)], 60n, ny()}
 
 # Work nobody covers, due inside the horizon: it should cross a zip and be flagged.
 def outside_inst() -> T.Instance:
-  T.Instance{[crew(1n, [100n], 480n)], [job(1n, 100n, 555n, 10n)], 60n}
+  T.Instance{[crew(1n, [100n], 480n)], [job(1n, 100n, 555n, 10n)], 60n, ny()}
 
 # Same, but too far for the cap.
 def too_far_inst() -> T.Instance:
-  T.Instance{[crew(1n, [100n], 2000n)], [T.Appraisal{1n, la(), 555n, 10n, 20n}], 60n}
+  T.Instance{[crew(1n, [100n], 2000n)], [T.Appraisal{1n, la(), 555n, 10n, 20n, ny()}], 60n, ny()}
 
 def total_outside(routes: List<&2, T.Route>) -> Nat:
   match routes:
@@ -193,6 +207,10 @@ def heal_checks() -> List<&2, Check>:
    Check{"a new request lands in the backlog", Nat.is_eq(backlog(after(start(), H.Request{far_job()})), 1n)},
    Check{"a new request keeps the plan valid", valid(after(start(), H.Request{far_job()}))},
    Check{"a repeated request changes nothing", Nat.is_eq(placed(after(after(start(), H.Request{far_job()}), H.Request{far_job()})), 5n)},
+   Check{"a request from another state changes nothing", Nat.is_eq(placed(after(start(), H.Request{foreign_job()})), 4n)},
+   Check{"a request from another state keeps the plan valid", valid(after(start(), H.Request{foreign_job()}))},
+   Check{"a contractor from another state makes an instance invalid", Bool.not(P.Instance.ok(foreign_crew()))},
+   Check{"an appraisal from another state makes an instance invalid", Bool.not(P.Instance.ok(foreign_jobs()))},
    Check{"releasing a stop moves it to the backlog", Nat.is_eq(backlog(after(start(), H.Release{i})), 1n)},
    Check{"backfill moves it onto a route", Nat.is_eq(backlog(after(after(start(), H.Release{i}), H.Backfill{i, 1n, 11n, 0n})), 0n)},
    Check{"backfill keeps the plan valid", valid(after(after(start(), H.Release{i}), H.Backfill{i, 1n, 11n, 0n}))},

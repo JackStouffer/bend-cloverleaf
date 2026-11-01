@@ -39,7 +39,7 @@ def Laws.only_underway_completes(s, a, e):
 def Laws.every_appraisal_placed_once(inst, plan, a, ev, ea):
   +c = J.count(a, T.Instance.jobs(inst))
   Equal.trans(Nat, J.count(a, P.Plan.placed(plan)), c, 1n, PP.count_valid(a, inst, plan, ev),
-    L.one_of(c, ea, PJ.rising_once(a, T.Instance.jobs(inst), 0n, PP.v_inst(inst, plan, ev))))
+    L.one_of(c, ea, PJ.rising_once(a, T.Instance.jobs(inst), 0n, PP.v_rising(inst, plan, ev))))
 
 def Laws.nothing_else_placed(inst, plan, a, ev, ea):
   +c = J.count(a, T.Instance.jobs(inst))
@@ -66,6 +66,9 @@ def Laws.slot_order_is_strict(s):
 def Laws.route_crew_is_listed(inst, plan, n, r, ev, on):
   PR.crew_found(T.Instance.crews(inst), T.Route.crew(r),
     L.and_l(P.Crews.has(T.Instance.crews(inst), T.Route.crew(r)), R.Route.ok(T.Instance.cap(inst), r), PR.fine_valid(inst, plan, n, r, ev, on)))
+
+def Laws.route_stays_in_state(inst, plan, n, r, k, s, ev, on, at):
+  PR.stays_in_state(inst, plan, n, r, k, s, ev, on, at)
 
 def Laws.locked_stops_come_first(inst, plan, n, r, ev, on):
   PR.open_tail(T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on))
@@ -112,6 +115,9 @@ def Laws.locked_stop_cant_be_cancelled(inst, plan, i, held):
 def Laws.repeat_request_changes_nothing(inst, plan, job, known):
   %Equal.sym(Bool, J.has_id(T.Instance.jobs(inst), T.Appraisal.id(job)), True{}, known) : {H.request.if(_, inst, plan, job) == H.State{inst, plan} : H.State}
   {==}
+
+def Laws.request_from_another_state_changes_nothing(inst, plan, job, other):
+  PE.request_other(J.has_id(T.Instance.jobs(inst), T.Appraisal.id(job)), inst, plan, job, other)
 
 def Laws.closed_route_takes_no_new_work(cap, plan, i, c, d, at, closed):
   PE.closed_backfill(cap, plan, i, c, d, at, closed)

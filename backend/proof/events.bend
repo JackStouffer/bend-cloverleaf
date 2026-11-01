@@ -326,10 +326,11 @@ def valid_cancel(inst, plan, i, ev, eg):
   +x = P.Plan.placed(next)
   +j = J.without(T.Instance.jobs(inst), i)
   +pull = {H.Pull{i} : H.Edit}
-  +e1 = PJ.rising_without(T.Instance.jobs(inst), i, 0n, PP.v_inst(inst, plan, ev))
+  +ok = PP.v_inst(inst, plan, ev)
+  +e1 = PJ.rising_without(T.Instance.jobs(inst), i, 0n, PP.ok_rising(inst, ok))
   +vv = PP.valid_edit(inst, pull, plan, ev)
   +p1 = PP.Edit2(inst, pull, plan)
-  PP.valid_intro(i2, next, e1,
+  PP.valid_intro(i2, next, PP.ok_intro(i2, e1, PJ.in_state_without(T.Instance.jobs(inst), i, T.Instance.state(inst), PP.ok_jobs(inst, ok)), PP.ok_crews(inst, ok)),
     PJ.same_sort_intro(x, j, e1, agree_cancel(J.sort(x), inst, plan, i, ev, eg), agree_cancel(j, inst, plan, i, ev, eg)),
     PP.v_slots(inst, p1, vv), PP.v_routes(inst, p1, vv))
 
@@ -423,16 +424,35 @@ law valid_request:
   for +job: T.Appraisal
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
   for +ek: {J.has_id(T.Instance.jobs(inst), T.Appraisal.id(job)) == False{} : Bool}
+  for +es: {Nat.is_eq(T.Appraisal.state(job), T.Instance.state(inst)) == True{} : Bool}
   {P.Plan.valid(H.Instance.with(inst, job), T.Plan{T.Plan.routes(plan), job <> T.Plan.backlog(plan), T.Plan.exceptions(plan)}) == True{} : Bool}
 
-def valid_request(inst, plan, job, ev, ek):
+def valid_request(inst, plan, job, ev, ek, es):
   +next = {T.Plan{T.Plan.routes(plan), job <> T.Plan.backlog(plan), T.Plan.exceptions(plan)} : T.Plan}
   +x = P.Plan.placed(next)
   +j = J.insert(T.Instance.jobs(inst), job)
-  +e1 = PJ.rising_insert(T.Instance.jobs(inst), job, 0n, PP.v_inst(inst, plan, ev), L.le_zero(T.Appraisal.id(job)), ek)
-  PP.valid_intro(H.Instance.with(inst, job), next, e1,
+  +ok = PP.v_inst(inst, plan, ev)
+  +e1 = PJ.rising_insert(T.Instance.jobs(inst), job, 0n, PP.ok_rising(inst, ok), L.le_zero(T.Appraisal.id(job)), ek)
+  PP.valid_intro(H.Instance.with(inst, job), next, PP.ok_intro(H.Instance.with(inst, job), e1, PJ.in_state_insert(T.Instance.jobs(inst), job, T.Instance.state(inst), PP.ok_jobs(inst, ok), es), PP.ok_crews(inst, ok)),
     PJ.same_sort_intro(x, j, e1, agree_request(J.sort(x), inst, plan, job, ev), agree_request(j, inst, plan, job, ev)),
     PP.v_slots(inst, plan, ev), PP.v_routes(inst, plan, ev))
+
+law place_valid:
+  for +c: Bool
+  for +inst: T.Instance
+  for +plan: T.Plan
+  for +job: T.Appraisal
+  for +ec: {Nat.is_eq(T.Appraisal.state(job), T.Instance.state(inst)) == c : Bool}
+  for +ek: {J.has_id(T.Instance.jobs(inst), T.Appraisal.id(job)) == False{} : Bool}
+  for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
+  {P.Plan.valid(H.State.inst(H.request.place(c, inst, plan, job)), H.State.plan(H.request.place(c, inst, plan, job))) == True{} : Bool}
+
+def place_valid(c, inst, plan, job, ec, ek, ev):
+  match c:
+    case True{}:
+      valid_request(inst, plan, job, ev, ek, ec)
+    case False{}:
+      ev
 
 law request_valid:
   for +b: Bool
@@ -448,7 +468,37 @@ def request_valid(b, inst, plan, job, eb, ev):
     case True{}:
       ev
     case False{}:
-      valid_request(inst, plan, job, ev, eb)
+      place_valid(Nat.is_eq(T.Appraisal.state(job), T.Instance.state(inst)), inst, plan, job, {==}, eb, ev)
+
+law place_locked:
+  for +c: Bool
+  for +inst: T.Instance
+  for +plan: T.Plan
+  for +job: T.Appraisal
+  {P.Routes.locked(T.Plan.routes(H.State.plan(H.request.place(c, inst, plan, job)))) == P.Routes.locked(T.Plan.routes(plan)) : List<&2, ST()>}
+
+def place_locked(c, inst, plan, job):
+  match c:
+    case True{}:
+      {==}
+    case False{}:
+      {==}
+
+law request_other:
+  for +b: Bool
+  for +inst: T.Instance
+  for +plan: T.Plan
+  for +job: T.Appraisal
+  for +other: {Nat.is_eq(T.Appraisal.state(job), T.Instance.state(inst)) == False{} : Bool}
+  {H.request.if(b, inst, plan, job) == H.State{inst, plan} : H.State}
+
+def request_other(b, inst, plan, job, other):
+  match b:
+    case True{}:
+      {==}
+    case False{}:
+      %Equal.sym(Bool, Nat.is_eq(T.Appraisal.state(job), T.Instance.state(inst)), False{}, other) : {H.request.place(_, inst, plan, job) == H.State{inst, plan} : H.State}
+      {==}
 
 law request_locked:
   for +b: Bool
@@ -462,7 +512,7 @@ def request_locked(b, inst, plan, job):
     case True{}:
       {==}
     case False{}:
-      {==}
+      place_locked(Nat.is_eq(T.Appraisal.state(job), T.Instance.state(inst)), inst, plan, job)
 
 # Backfilling
 # -----------
@@ -866,7 +916,7 @@ def valid_fill(inst, plan, i, job, c, d, at, ef, eo, ev):
   +j = T.Instance.jobs(inst)
   +routes = T.Plan.routes(plan)
   PP.valid_intro(inst, next, PP.v_inst(inst, plan, ev),
-    PJ.same_sort_intro(x, j, PP.v_inst(inst, plan, ev), agree_fill(J.sort(x), inst, plan, i, job, c, d, at, ef, eo, ev), agree_fill(j, inst, plan, i, job, c, d, at, ef, eo, ev)),
+    PJ.same_sort_intro(x, j, PP.v_rising(inst, plan, ev), agree_fill(J.sort(x), inst, plan, i, job, c, d, at, ef, eo, ev), agree_fill(j, inst, plan, i, job, c, d, at, ef, eo, ev)),
     %Equal.sym(List<&2, P.Slot>, P.Routes.slots(H.Edited.routes(H.Routes.put(routes, cap, c, d, job, at))), P.Routes.slots(routes), slots_put(routes, cap, c, d, job, at)) : {P.Slots.sorted(_) == True{} : Bool}
     PP.v_slots(inst, plan, ev),
     ok_put_all(routes, crews, cap, c, d, job, at, PP.v_routes(inst, plan, ev)))

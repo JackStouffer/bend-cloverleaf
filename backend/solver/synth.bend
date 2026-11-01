@@ -83,7 +83,7 @@ def crews(n: Nat, +id: Nat, +x: Nat, +first: Nat, +span: Nat) -> List<&2, T.Cont
       +y = next(next(x))
       +m = Nat.mod(id, Metros.size())
       +z = Nat.add(Nat.mul(m, 100n), Nat.mod(y, 8n))
-      T.Contractor{id, Point.near(m, y), zips.go(8n, z, Nil{}), 480n, days.go(span, first, Nil{})} <> crews(p, 1n+id, y, first, span)
+      T.Contractor{id, Point.near(m, y), zips.go(8n, z, Nil{}), 480n, days.go(span, first, Nil{}), 0n} <> crews(p, 1n+id, y, first, span)
 
 def jobs(n: Nat, +id: Nat, +x: Nat, +first: Nat, +span: Nat) -> List<&2, T.Appraisal>:
   match n:
@@ -93,7 +93,7 @@ def jobs(n: Nat, +id: Nat, +x: Nat, +first: Nat, +span: Nat) -> List<&2, T.Appra
       +y = next(next(x))
       +m = Nat.mod(id, Metros.size())
       +site = Point.near(m, y)
-      T.Appraisal{id, site, area(site, m), Nat.add(first, Nat.mod(next(y), span)), 20n} <> jobs(p, 1n+id, y, first, span)
+      T.Appraisal{id, site, area(site, m), Nat.add(first, Nat.mod(next(y), span)), 20n, 0n} <> jobs(p, 1n+id, y, first, span)
 
 def instance(+crew_count: Nat, +job_count: Nat, +first: Nat, +span: Nat) -> T.Instance:
-  T.Instance{crews(crew_count, 1n, 7n, first, span), jobs(job_count, 1n, 12345n, first, span), 60n}
+  T.Instance{crews(crew_count, 1n, 7n, first, span), jobs(job_count, 1n, 12345n, first, span), 60n, 0n}

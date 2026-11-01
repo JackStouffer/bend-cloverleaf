@@ -133,6 +133,20 @@ law route_crew_is_listed:
   exs i: Nat
   {List.get(&2, T.Contractor, T.Instance.crews(inst), i) == Some{Crew(r)} : Maybe<&2, T.Contractor>}
 
+# Contractors never work across a state line: every stop is in the contractor's
+# state, including out-of-zip work done to save a deadline.
+law route_stays_in_state:
+  for +inst: T.Instance
+  for +plan: T.Plan
+  for +n: Nat
+  for +r: T.Route
+  for +k: Nat
+  for +s: T.Stop
+  for +ev: Valid(inst, plan)
+  for +on: OnPlan(plan, n, r)
+  for +at: OnRoute(r, k, s)
+  {T.Appraisal.state(T.Stop.job(s)) == T.Contractor.state(Crew(r)) : Nat}
+
 # Locked stops come first: everything after the locked head is still open.
 law locked_stops_come_first:
   for +inst: T.Instance
@@ -256,6 +270,15 @@ law repeat_request_changes_nothing:
   for +plan: T.Plan
   for +job: T.Appraisal
   for +known: {J.has_id(T.Instance.jobs(inst), T.Appraisal.id(job)) == True{} : Bool}
+  {H.request(inst, plan, job) == H.State{inst, plan} : H.State}
+
+# A request from another state belongs to that state's instance, so this one
+# changes nothing.
+law request_from_another_state_changes_nothing:
+  for +inst: T.Instance
+  for +plan: T.Plan
+  for +job: T.Appraisal
+  for +other: {Nat.is_eq(T.Appraisal.state(job), T.Instance.state(inst)) == False{} : Bool}
   {H.request(inst, plan, job) == H.State{inst, plan} : H.State}
 
 law closed_route_takes_no_new_work:

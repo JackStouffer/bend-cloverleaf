@@ -372,7 +372,7 @@ def once_on_route(a, inst, plan, n, r, ev, at):
     L.le_trans(PP.RC(a, routes), Nat.add(PP.RC(a, routes), rest), 1n, L.le_add_l(PP.RC(a, routes), rest),
       %PP.placed_count(a, plan) : {Nat.is_le(_, 1n) == True{} : Bool}
       %Equal.sym(Nat, J.count(a, P.Plan.placed(plan)), c, PP.count_valid(a, inst, plan, ev)) : {Nat.is_le(_, 1n) == True{} : Bool}
-      PJ.rising_once(a, T.Instance.jobs(inst), 0n, PP.v_inst(inst, plan, ev))))
+      PJ.rising_once(a, T.Instance.jobs(inst), 0n, PP.v_rising(inst, plan, ev))))
 
 # Slots
 # -----
@@ -559,19 +559,23 @@ law crew_of.go:
   for +m2: Nat
   for +d1: List<&2, Nat>
   for +d2: List<&2, Nat>
+  for +t1: Nat
+  for +t2: Nat
   for +ei: {i1 == i2 : Nat}
   for +eh: {h1 == h2 : T.Point}
   for +ez: {z1 == z2 : List<&2, Nat>}
   for +em: {m1 == m2 : Nat}
   for +ed: {d1 == d2 : List<&2, Nat>}
-  {T.Contractor{i1, h1, z1, m1, d1} == T.Contractor{i2, h2, z2, m2, d2} : T.Contractor}
+  for +et: {t1 == t2 : Nat}
+  {T.Contractor{i1, h1, z1, m1, d1, t1} == T.Contractor{i2, h2, z2, m2, d2, t2} : T.Contractor}
 
-def crew_of.go(i1, i2, h1, h2, z1, z2, m1, m2, d1, d2, ei, eh, ez, em, ed):
-  %ei : {T.Contractor{i1, h1, z1, m1, d1} == T.Contractor{_, h2, z2, m2, d2} : T.Contractor}
-  %eh : {T.Contractor{i1, h1, z1, m1, d1} == T.Contractor{i1, _, z2, m2, d2} : T.Contractor}
-  %ez : {T.Contractor{i1, h1, z1, m1, d1} == T.Contractor{i1, h1, _, m2, d2} : T.Contractor}
-  %em : {T.Contractor{i1, h1, z1, m1, d1} == T.Contractor{i1, h1, z1, _, d2} : T.Contractor}
-  %ed : {T.Contractor{i1, h1, z1, m1, d1} == T.Contractor{i1, h1, z1, m1, _} : T.Contractor}
+def crew_of.go(i1, i2, h1, h2, z1, z2, m1, m2, d1, d2, t1, t2, ei, eh, ez, em, ed, et):
+  %ei : {T.Contractor{i1, h1, z1, m1, d1, t1} == T.Contractor{_, h2, z2, m2, d2, t2} : T.Contractor}
+  %eh : {T.Contractor{i1, h1, z1, m1, d1, t1} == T.Contractor{i1, _, z2, m2, d2, t2} : T.Contractor}
+  %ez : {T.Contractor{i1, h1, z1, m1, d1, t1} == T.Contractor{i1, h1, _, m2, d2, t2} : T.Contractor}
+  %em : {T.Contractor{i1, h1, z1, m1, d1, t1} == T.Contractor{i1, h1, z1, _, d2, t2} : T.Contractor}
+  %ed : {T.Contractor{i1, h1, z1, m1, d1, t1} == T.Contractor{i1, h1, z1, m1, _, t2} : T.Contractor}
+  %et : {T.Contractor{i1, h1, z1, m1, d1, t1} == T.Contractor{i1, h1, z1, m1, d1, _} : T.Contractor}
   {==}
 
 law crew_of:
@@ -582,19 +586,22 @@ law crew_of:
 
 def crew_of(a, b, e):
   match a b:
-    case T.Contractor{i1, h1, z1, m1, d1} T.Contractor{i2, h2, z2, m2, d2}:
-      +r3 = Bool.and(Nat.is_eq(m1, m2), T.Nats.is_eq(d1, d2))
+    case T.Contractor{i1, h1, z1, m1, d1, t1} T.Contractor{i2, h2, z2, m2, d2, t2}:
+      +r4 = Bool.and(T.Nats.is_eq(d1, d2), Nat.is_eq(t1, t2))
+      +r3 = Bool.and(Nat.is_eq(m1, m2), r4)
       +r2 = Bool.and(T.Nats.is_eq(z1, z2), r3)
       +r1 = Bool.and(T.Point.is_eq(h1, h2), r2)
       +s1 = L.and_r(Nat.is_eq(i1, i2), r1, e)
       +s2 = L.and_r(T.Point.is_eq(h1, h2), r2, s1)
       +s3 = L.and_r(T.Nats.is_eq(z1, z2), r3, s2)
-      crew_of.go(i1, i2, h1, h2, z1, z2, m1, m2, d1, d2,
+      +s4 = L.and_r(Nat.is_eq(m1, m2), r4, s3)
+      crew_of.go(i1, i2, h1, h2, z1, z2, m1, m2, d1, d2, t1, t2,
         L.eq_of(i1, i2, L.and_l(Nat.is_eq(i1, i2), r1, e)),
         PJ.point_of(h1, h2, L.and_l(T.Point.is_eq(h1, h2), r2, s1)),
         L.nats_of(z1, z2, L.and_l(T.Nats.is_eq(z1, z2), r3, s2)),
-        L.eq_of(m1, m2, L.and_l(Nat.is_eq(m1, m2), T.Nats.is_eq(d1, d2), s3)),
-        L.nats_of(d1, d2, L.and_r(Nat.is_eq(m1, m2), T.Nats.is_eq(d1, d2), s3)))
+        L.eq_of(m1, m2, L.and_l(Nat.is_eq(m1, m2), r4, s3)),
+        L.nats_of(d1, d2, L.and_l(T.Nats.is_eq(d1, d2), Nat.is_eq(t1, t2), s4)),
+        L.eq_of(t1, t2, L.and_r(T.Nats.is_eq(d1, d2), Nat.is_eq(t1, t2), s4)))
 
 # Crews.has means the contractor really is in the list, at some index.
 law crew_found:
@@ -615,6 +622,90 @@ def crew_found(crews, c, e):
         +x => (0n, %crew_of(h, c, x) : {Some{h} == Some{_} : Maybe<&2, T.Contractor>}
           {==}),
         +x => crew_found.next(h, t, c, crew_found(t, c, L.or_rest(a, b, e, x))))
+
+# States
+# ------
+
+law crew_state:
+  for +crews: List<&2, T.Contractor>
+  for +c: T.Contractor
+  for +s: Nat
+  for +ex: {P.Crews.in_state(crews, s) == True{} : Bool}
+  for +eh: {P.Crews.has(crews, c) == True{} : Bool}
+  {T.Contractor.state(c) == s : Nat}
+
+def crew_state(crews, c, s, ex, eh):
+  match crews:
+    case Nil{}:
+      L.never({T.Contractor.state(c) == s : Nat}, eh)
+    case +h <> +t:
+      +x = Nat.is_eq(T.Contractor.state(h), s)
+      +y = P.Crews.in_state(t, s)
+      +a = T.Contractor.is_eq(h, c)
+      L.cases(a, {T.Contractor.state(c) == s : Nat},
+        +e =>
+          %crew_of(h, c, e) : {T.Contractor.state(_) == s : Nat}
+          L.eq_of(T.Contractor.state(h), s, L.and_l(x, y, ex)),
+        +e => crew_state(t, c, s, L.and_r(x, y, ex), L.or_rest(a, P.Crews.has(t, c), eh, e)))
+
+# A stop on a route counts toward its own appraisal.
+law jc_pos:
+  for +stops: ST()
+  for +k: Nat
+  for +s: T.Stop
+  for +at: {List.get(&2, T.Stop, stops, k) == Some{s} : Maybe<&2, T.Stop>}
+  {Nat.is_le(1n, JC(T.Stop.job(s), stops)) == True{} : Bool}
+
+def jc_pos(stops, k, s, at):
+  match stops k:
+    case Nil{} _:
+      Empty.absurd({Nat.is_le(1n, JC(T.Stop.job(s), Nil{})) == True{} : Bool}, none_stop(s, at))
+    case +h <> +t 0n:
+      +a = T.Stop.job(h)
+      %some_stop(h, s, at) : {Nat.is_le(1n, JC(T.Stop.job(_), h <> t)) == True{} : Bool}
+      %Equal.sym(Nat, J.count.one(a, a), 1n, PJ.one_t(a, a, PJ.app_refl(a))) : {Nat.is_le(1n, Nat.add(_, JC(a, t))) == True{} : Bool}
+      L.le_add_l(1n, JC(a, t))
+    case +h <> +t 1n+p:
+      +a = T.Stop.job(s)
+      L.le_trans(1n, JC(a, t), Nat.add(J.count.one(a, T.Stop.job(h)), JC(a, t)), jc_pos(t, p, s, at),
+        L.le_add_r(J.count.one(a, T.Stop.job(h)), JC(a, t)))
+
+# Everything on a route is in the contractor's state, because everything in a
+# valid plan comes from one instance, and an instance is one state.
+law stays_in_state:
+  for +inst: T.Instance
+  for +plan: T.Plan
+  for +n: Nat
+  for +r: T.Route
+  for +k: Nat
+  for +s: T.Stop
+  for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
+  for +on: At(T.Plan.routes(plan), n, r)
+  for +at: {List.get(&2, T.Stop, T.Route.stops(r), k) == Some{s} : Maybe<&2, T.Stop>}
+  {T.Appraisal.state(T.Stop.job(s)) == T.Contractor.state(T.Route.crew(r)) : Nat}
+
+def stays_in_state(inst, plan, n, r, k, s, ev, on, at):
+  +a = T.Stop.job(s)
+  +st = T.Instance.state(inst)
+  +jobs = T.Instance.jobs(inst)
+  +crews = T.Instance.crews(inst)
+  +crew = T.Route.crew(r)
+  +routes = T.Plan.routes(plan)
+  +ok = PP.v_inst(inst, plan, ev)
+  +c = J.count(a, jobs)
+  +rc = PP.RC(a, routes)
+  +rest = Nat.add(J.count(a, T.Plan.backlog(plan)), PP.EC(a, T.Plan.exceptions(plan)))
+  +ec = L.le_trans(1n, JC(a, T.Route.stops(r)), c, jc_pos(T.Route.stops(r), k, s, at),
+    L.le_trans(JC(a, T.Route.stops(r)), rc, c, jc_le_rc(a, routes, n, r, on),
+      L.le_trans(rc, Nat.add(rc, rest), c, L.le_add_l(rc, rest),
+        %PP.placed_count(a, plan) : {Nat.is_le(_, c) == True{} : Bool}
+        %Equal.sym(Nat, J.count(a, P.Plan.placed(plan)), c, PP.count_valid(a, inst, plan, ev)) : {Nat.is_le(_, c) == True{} : Bool}
+        L.le_refl(c))))
+  Equal.trans(Nat, T.Appraisal.state(a), st, T.Contractor.state(crew),
+    PJ.state_of_count(a, jobs, st, PP.ok_jobs(inst, ok), ec),
+    Equal.sym(Nat, T.Contractor.state(crew), st,
+      crew_state(crews, crew, st, PP.ok_crews(inst, ok),
+        L.and_l(P.Crews.has(crews, crew), R.Route.ok(T.Instance.cap(inst), r), fine_valid(inst, plan, n, r, ev, on)))))
 
 # Loops
 # -----

@@ -50,6 +50,13 @@ def Crews.has(crews: List<&2, T.Contractor>, +c: T.Contractor) -> Bool:
     case h <> t:
       Bool.or(T.Contractor.is_eq(h, c), Crews.has(t, c))
 
+def Crews.in_state(crews: List<&2, T.Contractor>, +s: Nat) -> Bool:
+  match crews:
+    case Nil{}:
+      True{}
+    case h <> t:
+      Bool.and(Nat.is_eq(T.Contractor.state(h), s), Crews.in_state(t, s))
+
 def Routes.jobs(routes: List<&2, T.Route>) -> List<&2, T.Appraisal>:
   match routes:
     case Nil{}:
@@ -87,8 +94,12 @@ def Routes.locked(routes: List<&2, T.Route>) -> List<&2, List<&2, T.Stop>>:
     case r <> t:
       R.Stops.locked(T.Route.stops(r)) <> Routes.locked(t)
 
+# Everything in an instance is in its state, so a contractor can't be handed work
+# across a state line, not even to save a deadline.
 def Instance.ok(+inst: T.Instance) -> Bool:
-  J.rising(T.Instance.jobs(inst), 0n)
+  Bool.and(J.rising(T.Instance.jobs(inst), 0n),
+    Bool.and(J.in_state(T.Instance.jobs(inst), T.Instance.state(inst)),
+      Crews.in_state(T.Instance.crews(inst), T.Instance.state(inst))))
 
 def Plan.partition_ok(+inst: T.Instance, +plan: T.Plan) -> Bool:
   J.same(J.sort(Plan.placed(plan)), T.Instance.jobs(inst))

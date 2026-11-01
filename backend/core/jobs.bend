@@ -106,6 +106,13 @@ def has_id(xs: List<&2, T.Appraisal>, +i: Nat) -> Bool:
     case h <> t:
       Bool.or(Nat.is_eq(T.Appraisal.id(h), i), has_id(t, i))
 
+def in_state(xs: List<&2, T.Appraisal>, +s: Nat) -> Bool:
+  match xs:
+    case Nil{}:
+      True{}
+    case h <> t:
+      Bool.and(Nat.is_eq(T.Appraisal.state(h), s), in_state(t, s))
+
 # Sorted insert into a list sorted by id.
 def insert(+xs: List<&2, T.Appraisal>, +j: T.Appraisal) -> List<&2, T.Appraisal>:
   match xs:
