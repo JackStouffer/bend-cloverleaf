@@ -77,7 +77,7 @@ Tested on Bend 2.0.39 on this machine (6 cores, 12 threads, 15GB RAM, 926GB free
 | Node 18.19.1 from apt can't run `openapi-typescript`. Node 24.22.2 can | Node 24 is the project version, in `~/.local` here and in the containers |
 | Docker isn't installed here, and installing it needs `sudo` | The Compose setup hasn't run on Docker yet. Its nginx config passed a local test on nginx 1.24 |
 | `openapi-typescript` 7.13 needs TypeScript 5. npm's default is now TypeScript 7 | Pin TypeScript 5 (5.9.3 tested) |
-| `--verdict` needs Lean 4.34.0, which isn't installed | `bend PROOF.bend` still works. Install Lean before relying on the kernel recheck |
+| `--verdict` needs exactly Lean 4.34.0 (installed through elan). The first run compiles the kernel in about 24s and caches it in `~/.bend/bendtt/`, so later runs take about 1s | A fresh machine or CI needs elan with that toolchain, or `$BENDTT` set to a built kernel. Plain `bend PROOF.bend` needs neither |
 | The termination checker rejected a self-call on the same schema in a different mode, and Bend won't infer `Equal.sym`'s arguments | Generators and proofs need some restructuring and explicit arguments. Expect this friction throughout |
 | `Nat` runs as a 48-bit immediate with O(1) arithmetic, as fast as `U32` (100M mixed operations in 0.67s), and aborts past 2^48 instead of wrapping | Domain numbers are `Nat`, which needs no bit-level lemmas. Ids, minutes and days all fit |
 | A universally quantified hypothesis is an affine closure, so a proof can use it once. Equality proofs are `Data` and reusable | Bag equality is stated over a concrete list (`agree`), not as a for-all |
@@ -230,7 +230,7 @@ Domain types, plan validity, the appraisal lifecycle, and the checker, with a sm
 
 **Done when:** the validity and healing laws are proven, and proof effort has been recorded.
 **Go/no-go:** if these laws are too painful, reduce the proof scope before building further.
-**Status:** done. All 40 laws pass `bend PROOF.bend`, and the result is go: the proof scope stays as planned. `--verdict` is still outstanding, because Lean isn't installed.
+**Status:** done. All 40 laws pass `bend PROOF.bend`, and the result is go: the proof scope stays as planned. `bend PROOF.bend --verdict` also passes with the proven kernel, on Lean 4.34.0.
 
 ### 2. Road network (XL)
 
@@ -300,7 +300,7 @@ Tracked from Milestone 1 onward:
 | Proofs | 6,698 lines and 386 lemmas, or 3.7 proof lines per line of code |
 | Checking everything | 0.5s |
 | `@unsafe` or foreign code | None |
-| `--verdict` | Not run. Lean isn't installed |
+| `--verdict` | Passes on Lean 4.34.0, about 1s once the kernel is cached |
 
 Proofs took most of the milestone's work, but they were steady. Once the design was right, most failures were one-line fixes to a proof script, and no law had to be weakened. The hard part was design: healing proofs are short because `Route.remake` makes every rebuilt route valid by construction. Without that, each of the six edits would have needed its own validity proof.
 
