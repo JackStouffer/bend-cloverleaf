@@ -31,7 +31,7 @@ bend base Map                         # look up a name in Base
 
 - `LAWS.bend` states the rules and `PROOF.bend` proves them, with `def Laws.name` for `law name`.
 - Never weaken, delete or reword an existing law to get a proof through. If a law seems wrong, stop and ask.
-- New business rules go in as laws when they can be stated over the pure core.
+- New business rules go in as laws when they can be stated over the pure core. The more rules to formalize business logic, the better
 - `PROOF.bend` must not import IO code. A `@unsafe` or foreign def anywhere in its imports makes the gate fail.
 - Prove that plans are valid. Measure route quality with benchmarks, since optimality isn't a proof goal.
 
