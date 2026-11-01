@@ -2,7 +2,7 @@
 
 Cloverleaf is a real-world test of [Bend](https://bend-lang.com), a new programming language that combines formal proofs with fast parallel execution. The goal is to find out how useful Bend is for general-purpose web programming by building a complete application with it, not a small demo.
 
-**Status:** early. There's a minimal skeleton connecting a Bend service, a Preact page and nginx, but no application features yet.
+**Status:** early. The pure core is done and proven: domain rules, a plan checker, same-day healing and a small planner on straight-line distances. It isn't wired to the web process yet, so the app itself is still a skeleton connecting a Bend service, a Preact page and nginx.
 
 ## Why this project exists
 
@@ -60,7 +60,7 @@ Then open https://localhost:8443. The certificate is self-signed, so your browse
 
 ## Repository layout
 
-- `backend/`: Bend services and proofs
+- `backend/`: Bend services and proofs. [LAWS.bend](backend/LAWS.bend) lists every rule the compiler has proven
 - `frontend/`: TypeScript and Preact app
 - `deploy/`: nginx image and config
 - `compose.yaml`, `compose.dev.yaml`: local deployment

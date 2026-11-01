@@ -40,8 +40,11 @@ Cloverleaf is a proof of concept that tests whether Bend works for general-purpo
 - Planning covers a rolling 7 days. The next day's routes are published after the nightly solve.
 - Deadlines mean end of day in the appraisal's local time zone.
 - Drive times come from road type and speed limits, with no live traffic.
-- Stops that are completed or underway are locked during healing.
-- Out-of-zip work is capped at 60 extra drive minutes by default, and admins can change this.
+- Stops that are completed or underway are locked during healing, and form the front of the route.
+- A cancellation is refused once the stop is underway, because a locked stop can't leave its route.
+- Out-of-zip work is capped at 60 extra drive minutes by default, and admins can change this. The cap counts unlocked out-of-zip stops only. Without that exception a cancellation next to a locked out-of-zip stop could push a route over the cap with no way to heal it.
+- A failed stop goes straight back to the backlog, which is what retries it.
+- A sick contractor's route closes to new work and its open stops go to the backlog. Updating the calendar itself is left to Milestone 6.
 - A dealer's opening hours and an individual's presence at home aren't modeled, because deadlines are date-only.
 - The external API is versioned REST with JSON, and creating a request is safe to retry.
 - Password resets are done by an admin, because there's no email.
@@ -76,8 +79,14 @@ Tested on Bend 2.0.39 on this machine (6 cores, 12 threads, 15GB RAM, 926GB free
 | `openapi-typescript` 7.13 needs TypeScript 5. npm's default is now TypeScript 7 | Pin TypeScript 5 (5.9.3 tested) |
 | `--verdict` needs Lean 4.34.0, which isn't installed | `bend PROOF.bend` still works. Install Lean before relying on the kernel recheck |
 | The termination checker rejected a self-call on the same schema in a different mode, and Bend won't infer `Equal.sym`'s arguments | Generators and proofs need some restructuring and explicit arguments. Expect this friction throughout |
+| `Nat` runs as a 48-bit immediate with O(1) arithmetic, as fast as `U32` (100M mixed operations in 0.67s), and aborts past 2^48 instead of wrapping | Domain numbers are `Nat`, which needs no bit-level lemmas. Ids, minutes and days all fit |
+| A universally quantified hypothesis is an affine closure, so a proof can use it once. Equality proofs are `Data` and reusable | Bag equality is stated over a concrete list (`agree`), not as a for-all |
+| A literal fuel such as `improve(3n, ..)` inside a def makes the checker unroll it when comparing terms. It hangs with no message | Fuel and tuning reach solver defs as parameters |
+| 10,000 appraisals, 1,000 contractors and 7 days plan in 18.3s on 1 thread and 5.3s on 12, within 44MB, on straight-line times | The 30-minute target looks reachable, before road lookups are added |
+| Forking one search 2^2 ways gave 1.3x on 4,000 jobs, and 2^6 ways gave 2.9x, with no cost on one thread | Tasks never move, so unevenly loaded work needs far more tasks than cores. Measure fork depth instead of guessing |
+| The proven checker built with `-o .mjs` ran under Node, accepting a good plan and rejecting a duplicated and a lost appraisal | The browser validator works through plain JS constructors |
 
-Business-rule proof effort is still unmeasured. So far only the small schema law above has been proven, so Milestone 1 tests the real rules first.
+Proof effort for the real rules is now measured. See the scorecard.
 
 ## Architecture
 
@@ -94,8 +103,10 @@ Business-rule proof effort is still unmeasured. So far only the small schema law
 ```text
 backend/    Bend code, LAWS.bend, PROOF.bend, Dockerfile
   web/      Web process
-  core/     Pure core (planned)
-  solver/   Solver process (planned)
+  core/     Pure core: types, lifecycle, plan checker, healing, planner
+  proof/    Lemmas behind PROOF.bend
+  test/     Concrete scenarios the laws don't cover
+  solver/   Benchmark shell and synthetic instances, later the solver process
   road/     Road process (planned)
 frontend/   TypeScript and Preact npm project
 deploy/     nginx image and config
@@ -117,7 +128,7 @@ Compose runs the app the way a real deployment would, so nothing talks to the ba
 
 - **Real-world run:** `docker compose up --build` serves the built frontend, and is what Playwright, contract and load tests target.
 - **Development:** `docker compose -f compose.yaml -f compose.dev.yaml watch` keeps the same nginx and TLS path, swaps in Vite, and rebuilds the backend on change.
-- **Images:** the backend image fails to build if the Bend check fails, and will also run `bend PROOF.bend` once it exists.
+- **Images:** the backend image fails to build if `bend PROOF.bend`, the Bend check or the scenarios fail. This hasn't run on Docker yet.
 - **Certificates:** nginx creates a self-signed certificate in a Docker volume on first start. No key is ever committed.
 - **Secrets:** later secrets come from a gitignored `.env` file, never from the images or Compose files.
 - **Backend protection:** nginx buffers requests and limits body size, so slow or oversized clients never reach Bend's event loop. Server-Sent Events will need a route with buffering turned off.
@@ -178,7 +189,7 @@ Contractor overlaps may chain into one giant national cluster, so we can't count
 
 ## What the proofs cover
 
-Proven in `LAWS.bend`, for the pure core:
+Proven so far in `LAWS.bend`, for the pure core:
 
 - Every active appraisal is in exactly one place: a route, the backlog, or the exceptions queue.
 - Every route starts and ends at the contractor's start point and visits no stop twice.
@@ -188,6 +199,12 @@ Proven in `LAWS.bend`, for the pure core:
 - Healing never changes locked stops, and never makes a valid plan invalid.
 - Parallel and sequential selection give the same answer.
 - The optimizer never returns a worse score than its input.
+- The planner only considers open routes, on or before the deadline, with the hours left, and only urgent work leaves its zips.
+
+Healing is proven by construction: every edit rebuilds the route through `Route.remake`, so no runtime guard is involved, apart from the check that a reorder holds the same stops. The planner is the opposite. It isn't proven to build a valid plan. `publish` runs the proven checker on the result and falls back to the trivial plan, so what leaves is always valid, but a planner bug would show up as an empty plan instead of a failed proof.
+
+Still to prove:
+
 - Replaying a snapshot plus later events equals replaying the full log.
 - Codecs round-trip.
 - Every encoded API response conforms to its route's schema.
@@ -197,7 +214,9 @@ Proven in `LAWS.bend`, for the pure core:
 Not proven:
 
 - That routes are optimal. Quality is measured by benchmarks instead.
-- That road times match reality.
+- That the planner places work at all. A valid plan may leave everything in the backlog, so `test/scenario.bend` covers this.
+- That the planner handles the tightest deadline first. Also covered by the scenarios.
+- That road times match reality. No law looks inside the travel time function, so swapping in real road times changes no proof.
 - That the emitted `openapi.json` means the same thing as the Bend schema. Contract tests check real responses against the spec instead.
 - The IO shell, process wiring and frontend. These rely on testing.
 
@@ -211,6 +230,7 @@ Domain types, plan validity, the appraisal lifecycle, and the checker, with a sm
 
 **Done when:** the validity and healing laws are proven, and proof effort has been recorded.
 **Go/no-go:** if these laws are too painful, reduce the proof scope before building further.
+**Status:** done. All 40 laws pass `bend PROOF.bend`, and the result is go: the proof scope stays as planned. `--verdict` is still outstanding, because Lean isn't installed.
 
 ### 2. Road network (XL)
 
@@ -269,10 +289,69 @@ Tracked from Milestone 1 onward:
 - How well Bend fits a normal frontend workflow, including API changes reaching TypeScript and any spec drift found by contract tests
 - Developer friction, including compiler errors, missing features and `@unsafe` use
 
+### Milestone 1 results
+
+**Proof effort**
+
+| Measure | Result |
+|---|---|
+| Laws | 40, in 369 lines |
+| Core code | 1,833 lines |
+| Proofs | 6,698 lines and 386 lemmas, or 3.7 proof lines per line of code |
+| Checking everything | 0.5s |
+| `@unsafe` or foreign code | None |
+| `--verdict` | Not run. Lean isn't installed |
+
+Proofs took most of the milestone's work, but they were steady. Once the design was right, most failures were one-line fixes to a proof script, and no law had to be weakened. The hard part was design: healing proofs are short because `Route.remake` makes every rebuilt route valid by construction. Without that, each of the six edits would have needed its own validity proof.
+
+**How far changes ripple**
+
+- Adding one field to the published audit touched 20 lines of core and 47 lines of proof, all in 3 equality lemmas. No healing proof changed.
+- Moving the planner's constants into a `Tuning` record changed 2 lines of proof.
+
+**Bugs**
+
+Proofs caught no bug in the code as written. Every failed proof was a mistake in the proof script. The value showed up in two other places:
+
+- **Design:** stating the cap law exposed that a whole-route cap can't survive a cancellation next to a locked stop. That changed the rule before any code existed.
+- **Injected bugs:** we injected 25 bugs. `bend PROOF.bend` caught 22, and `test/scenario.bend` caught the other 3: all-zero drive times, the wrong deadline order, and a planner that drops every job.
+
+Mutation testing also caught a bad law. `candidate_fits_route` said only that `Select.fits` passed, so a bug inside `fits` changed the law along with the code, and "planner ignores deadlines" got through. It became three laws stated in plain numbers. A law that restates the code proves nothing, so laws need checking too.
+
+A failed proof doesn't always mean a false law. Some injected bugs were caught because a proof script stopped matching the code, and a harmless refactor would trip the same check.
+
+**Parallel speedup on real work**
+
+| Work | 1 thread | Best | Speedup |
+|---|---|---|---|
+| Plan check, 4,000 jobs | 24ms | 5ms on 12 threads | 4.8x |
+| Assigning jobs, 10,000 jobs | 16.2s | 4.2s on 12 threads | 3.8x |
+| Whole run, 10,000 jobs | 18.3s | 5.3s on 12 threads | 3.5x |
+| Polishing routes, 10,000 jobs | 1,311ms | 465ms on 8 threads | 2.8x |
+
+Output was identical at every thread count. This machine has 6 physical cores, so 12 threads flatters the thread count.
+
+Two things decided these numbers:
+
+- **Copying:** selecting through `take` and `drop` copied the route list for every job and gave no speedup. A balanced tree fixed that and nearly halved the single-thread time.
+- **Fork depth:** we cut the search from 2^4 lanes to 2^2 on a hunch, and the 4-thread speedup fell from 2.3x to 1.3x. A sweep showed the opposite was true, with the best results around 2^6. A job's candidates cluster on a few routes and tasks never move, so over-splitting is the only way to balance them.
+
+**Friction**
+
+- **Rewriting:** `%e` replaces the right side of `e` with its left, which is easy to get backwards. It caused about ten failed attempts.
+- **No inference or tactics:** every `Equal.trans` spells out each term, so proof lines run long. This is the main reason for the 3.7 ratio.
+- **For-all hypotheses:** they can only be used once, which forced the `agree` workaround. This was the most surprising limit.
+- **Silent hangs:** literal fuel in a def hangs the checker with no message or timeout. Finding it took bisecting the proof file law by law.
+- **Missing lemmas:** Base has almost nothing on `Nat` order or addition, so `proof/logic.bend` holds about 900 lines of basics.
+- **No work stealing:** a task stays where it starts, so load balance is on the programmer. Over-splitting works, but the right depth came from a sweep and may not hold for other work.
+- **Match placement:** `match` can't follow a `let` or a rewrite on the same parameter, so lets move into each arm.
+- **Eager evaluation:** `Bool.pick` evaluates both arms, and banned mutual recursion means thunks for lazy branches.
+- **Good:** error messages show the expected and observed terms in context, and were nearly always enough. Checking is fast enough to run after every edit.
+
 ## Main risks
 
 1. **Lower-48 road build:** decompression, parsing and region-building at this scale in Bend is the largest unknown, and 15GB of RAM is tight.
-2. **Proof effort:** untested so far, and it could slow every later milestone.
+2. **Proof effort:** measured at 3.7 proof lines per line of code, and manageable. The risk now is the verbosity of proofs at web scale, not whether they can be done.
 3. **Scale of road data in Bend's memory model:** lists and strings are expensive, so performance depends on staying in arrays.
 4. **Geocoding quality:** free address data has gaps, particularly in rural areas.
 5. **Phone GPS:** browsers allow geolocation only on trusted HTTPS or localhost. nginx provides HTTPS, but a phone won't trust the self-signed certificate, so a real-phone test needs a certificate the phone trusts. The fleet will use simulated locations.

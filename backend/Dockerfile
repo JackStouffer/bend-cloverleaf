@@ -16,7 +16,12 @@ ENV PATH="/opt/bend/bin:${PATH}" BEND_HOME=/opt/bend BEND_NO_TELEMETRY=1
 
 WORKDIR /src
 COPY . .
-RUN bend web/main.bend --check-only && mkdir -p /out && bend web/main.bend -o /out/web
+RUN bend PROOF.bend \
+  && bend web/main.bend --check-only \
+  && mkdir -p /out \
+  && bend test/scenario.bend -o /out/scenario \
+  && /out/scenario \
+  && bend web/main.bend -o /out/web
 
 FROM ubuntu:24.04
 

@@ -17,6 +17,7 @@ All work is done in main. No need to go through branching/pull request formaliti
 - Run `bend guide` to learn Bend before writing it. Also read `bend guide effects` before writing an effect, and `bend guide shaders` before writing parallel code.
 - Use `LAWS.bend` to keep important rules.
 - Run `bend PROOF.bend` before committing. It must print ALL PROOFS CHECK.
+- Keep rules the laws can't state in `test/scenario.bend`, and run it before committing too.
 - Parallelize the code whenever possible.
 
 ## Commands
@@ -38,6 +39,9 @@ bend file.bend -o build/out           # build a native binary
 ./build/out +RTS --threads 12 -RTS    # run on 12 CPU threads
 bend file.bend -o file.mjs            # build an ES module of non-IO defs for the frontend
 bend base Map                         # look up a name in Base
+bend test/scenario.bend -o build/scenario && ./build/scenario        # concrete scenarios
+bend solver/main.bend -o build/solver                                # build the benchmark
+./build/solver +RTS --threads 4 -RTS 1000 10000 7                    # crews, jobs, days
 ```
 
 Run these from `frontend/`, on Node 24:
@@ -76,6 +80,7 @@ npm run gen:api                       # regenerate openapi.json and the typed cl
 - Never load the whole road network into RAM. This machine has 15GB, and data should be streamed or loaded by region.
 - `U32` is the widest integer in Base and it wraps silently. Check for overflow in totals and offsets, and remember that OSM node IDs need more than 32 bits.
 - Parallel calls need balanced work, because tasks are never moved once assigned. Split by estimated cost, not by count.
+- When cost can't be estimated, fork far more tasks than cores, and sweep the fork depth rather than guessing it.
 - Values marked `+` and read by every lane cost an atomic per read.
 - This machine can't build GPU code, and `!` builds silently produce no `.gpu` file. Don't use `!`.
 
@@ -88,6 +93,11 @@ npm run gen:api                       # regenerate openapi.json and the typed cl
 - Mutual recursion is banned for checked defs.
 - `def f?(..)` declares an unsafe def, but it's called as `f(..)`.
 - A `Nat` parameter that shrinks must come before arguments that change in recursive calls.
+- `Nat` is a 48-bit immediate with O(1) arithmetic that traps on overflow, so prefer it to `U32` for domain numbers.
+- `%e : P` with `e : {a == b : T}` replaces `b` in the goal with `a`. Use `Equal.sym` to go the other way.
+- A for-all hypothesis is an affine closure and can only be used once. State it as a `Bool` over a list, because equality proofs are `Data`.
+- A literal fuel inside a def can hang the checker with no message. Pass fuel as a parameter to anything a law mentions.
+- State laws in plain numbers, not through the helper being tested, or a bug in the helper changes the law with it.
 
 ## Benchmarks
 
