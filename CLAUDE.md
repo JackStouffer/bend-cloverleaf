@@ -8,6 +8,10 @@ Cloverleaf plans daily routes for about 1,000 auto appraisal contractors across 
 
 The code here will be published publicly, so it must not include any secrets, envs or passwords. That covers commits, tests, fixtures, logs, docs and config examples.
 
+## Local Development
+
+All work is done in main. No need to go through branching/pull request formalities. 
+
 ## Bend rules
 
 - Run `bend guide` to learn Bend before writing it. Also read `bend guide effects` before writing an effect, and `bend guide shaders` before writing parallel code.
