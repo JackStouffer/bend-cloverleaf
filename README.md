@@ -2,7 +2,7 @@
 
 Cloverleaf is a real-world test of [Bend](https://bend-lang.com), a new programming language that combines formal proofs with fast parallel execution. The goal is to find out how useful Bend is for general-purpose web programming by building a complete application with it, not a small demo.
 
-**Status:** planning. No application code has been written yet.
+**Status:** early. There's a minimal skeleton connecting a Bend service, a Preact page and nginx, but no application features yet.
 
 ## Why this project exists
 
@@ -38,7 +38,32 @@ This is the traveling salesman problem with a lot of real-world constraints:
 - Public booking and tracking pages for individuals
 - Road routing and address lookup built from OpenStreetMap and US Census data, written in Bend
 
-The backend will be written entirely in Bend, and the browser UI will be plain JavaScript calling proven Bend functions. The company and all of the data are synthetic.
+The backend will be written entirely in Bend. The frontend will be a TypeScript and Preact app with strict type checking, strict ESLint and Prettier, just as a real team would set it up. Bend will generate the API's OpenAPI spec, and the frontend will call the API through a typed client generated from that spec. The company and all of the data are synthetic.
+
+## Running it
+
+Bend has no TLS, so the app runs behind nginx. Local development and testing use the same Docker Compose setup as a real deployment. You'll need Docker with the Compose and Buildx plugins.
+
+For a real-world run with the built frontend:
+
+```bash
+docker compose up --build
+```
+
+For development with hot reload:
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml watch
+```
+
+Then open https://localhost:8443. The certificate is self-signed, so your browser will warn you the first time.
+
+## Repository layout
+
+- `backend/`: Bend services and proofs
+- `frontend/`: TypeScript and Preact app
+- `deploy/`: nginx image and config
+- `compose.yaml`, `compose.dev.yaml`: local deployment
 
 ## Learn more
 

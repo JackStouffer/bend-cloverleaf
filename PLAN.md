@@ -26,9 +26,13 @@ Cloverleaf is a proof of concept that tests whether Bend works for general-purpo
 | Auth | Email and password for people, API keys for organizations |
 | Road data | OpenStreetMap, handled entirely in Bend, including reading the raw `.pbf` |
 | Geocoding | OpenStreetMap plus Census TIGER, self-hosted |
-| Stack | Bend backend, with a plain JS UI calling proven Bend functions |
+| Backend | Bend |
+| Frontend | TypeScript and Preact, in a real npm project with strict type checking, strict ESLint and Prettier |
+| API contract | Bend generates the OpenAPI spec, and the frontend uses a typed client generated from it |
 | Data | Realistic synthetic data |
-| Hosting | Local machine only |
+| Hosting | Local machine only, run with Docker Compose in the same shape as a real deployment |
+| TLS | Bend has no TLS, so nginx terminates it in front of the backend |
+| Repository | Separate `backend/` and `frontend/` folders |
 | Scope ends at | Appraisal marked complete. No report or photo workflow |
 
 ### Assumptions to correct if wrong
@@ -58,18 +62,105 @@ Tested on Bend 2.0.39 on this machine (6 cores, 12 threads, 15GB RAM, 926GB free
 | `Array<U32>` costs about 4 bytes per slot. A byte read as a `List` takes one cell, and `String` about 24 bytes per character | Keep large data in arrays or fixed-size records, and convert from lists quickly |
 | No U64 in Base, and OSM node IDs no longer fit in 32 bits | IDs need a two-word type, or a remap to compact IDs |
 | No HTTP, JSON, crypto, gzip or database in Base | All of these get built in Bend |
+| No TLS in Bend | nginx handles it |
+| A TCP server with `Nat` fuel passed `ALL PROOFS CHECK` with no `@unsafe`, and 4 billion fuel used only 2MB of memory | The IO shell can stay inside the proof gate, and a server needs no unsafe loop |
+| Bend builds from the pinned release tarball with an empty `HOME`, and a failed `--check-only` exits non-zero | A Docker build can fail on bad Bend code |
 | Bend's JS target runs sequentially | Fine for the browser validator, but no solving in the browser |
 | GPU build produced no `.gpu` file here (no CUDA, clang 18) | CPU only. GPU is out of scope |
+| A schema defined as a Bend datatype can set a handler's type, and a handler with a wrong field type failed to compile | API routes are defined as Bend data, so the schema is the single source of truth |
+| Bend proved that encoded output always conforms to its schema, on a small schema with strings, numbers, lists and objects | Conformance is a realistic law, not just a hope |
+| Bend emitted valid OpenAPI 3.1 that `openapi-typescript` and `openapi-fetch` accepted. `tsc` rejected a misspelled request field and an unknown response field | The contract chain works end to end on one route |
+| A Bend module built with `-o .mjs` bundled through Vite into a Preact app under strict `tsc`, using a hand-written declaration file | The proven checker can run in the real frontend build |
+| Node 18.19.1 from apt can't run `openapi-typescript`. Node 24.22.2 can | Node 24 is the project version, in `~/.local` here and in the containers |
+| Docker isn't installed here, and installing it needs `sudo` | The Compose setup hasn't run on Docker yet. Its nginx config passed a local test on nginx 1.24 |
+| `openapi-typescript` 7.13 needs TypeScript 5. npm's default is now TypeScript 7 | Pin TypeScript 5 (5.9.3 tested) |
+| `--verdict` needs Lean 4.34.0, which isn't installed | `bend PROOF.bend` still works. Install Lean before relying on the kernel recheck |
+| The termination checker rejected a self-call on the same schema in a different mode, and Bend won't infer `Equal.sym`'s arguments | Generators and proofs need some restructuring and explicit arguments. Expect this friction throughout |
 
-Proof effort is still unmeasured. No laws have been written yet, so Milestone 1 tests that first.
+Business-rule proof effort is still unmeasured. So far only the small schema law above has been proven, so Milestone 1 tests the real rules first.
 
 ## Architecture
 
+- **nginx:** the only public entry point. Terminates TLS, serves the built frontend, and proxies `/api/` to the web process.
 - **Web process:** HTTP, API, auth, sessions, live updates. Stays responsive by never doing heavy work.
 - **Solver process:** nightly planning and same-day repairs, parallel across cores.
 - **Road process:** batch travel-time and geocoding lookups against on-disk data.
 - **Pure core:** domain rules, plan validation, event replay and codecs, kept free of IO so `bend PROOF.bend` covers it. The checker also compiles to JS for the browser.
 - **Storage:** append-only event log with snapshots, in Bend, with state rebuilt by replay.
+- **Frontend:** a Preact single-page app in `frontend/`, talking to the backend only through the public API.
+
+### Repository layout
+
+```text
+backend/    Bend code, LAWS.bend, PROOF.bend, Dockerfile
+  web/      Web process
+  core/     Pure core (planned)
+  solver/   Solver process (planned)
+  road/     Road process (planned)
+frontend/   TypeScript and Preact npm project
+deploy/     nginx image and config
+compose.yaml, compose.dev.yaml
+```
+
+`bend PROOF.bend` runs from `backend/`, and npm scripts run from `frontend/`. `openapi.json` lives in `backend/`, because the backend owns it.
+
+### Local deployment
+
+Compose runs the app the way a real deployment would, so nothing talks to the backend directly. Only nginx publishes ports, and every other service stays on the internal Docker network.
+
+| Service | Role |
+|---|---|
+| `nginx` | TLS on port 8443, redirect from 8080, static frontend, proxy to the backend |
+| `web` | Bend web process, built in a multi-stage image with Bend pinned by checksum |
+| `solver`, `road` | Added in Milestones 2 and 3, with a shared data volume |
+| `frontend` | Development only. Vite with hot reload behind nginx |
+
+- **Real-world run:** `docker compose up --build` serves the built frontend, and is what Playwright, contract and load tests target.
+- **Development:** `docker compose -f compose.yaml -f compose.dev.yaml watch` keeps the same nginx and TLS path, swaps in Vite, and rebuilds the backend on change.
+- **Images:** the backend image fails to build if the Bend check fails, and will also run `bend PROOF.bend` once it exists.
+- **Certificates:** nginx creates a self-signed certificate in a Docker volume on first start. No key is ever committed.
+- **Secrets:** later secrets come from a gitignored `.env` file, never from the images or Compose files.
+- **Backend protection:** nginx buffers requests and limits body size, so slow or oversized clients never reach Bend's event loop. Server-Sent Events will need a route with buffering turned off.
+- **Road data:** kept in a bind-mounted, gitignored `data/` folder on the Linux filesystem, because it's too large for an image.
+
+### API contract
+
+Every API route is a Bend value in one route table, holding its method, path, auth rule, request schema and response schemas. Everything else comes from that table:
+
+1. **Handlers:** a handler's type is computed from its route, so a wrong response shape doesn't compile.
+2. **Codecs:** JSON encoding and decoding are driven by the schema, with laws for conformance and round trips.
+3. **Spec:** a Bend program walks the table and writes `openapi.json` (OpenAPI 3.1). The web process also serves it, so dealers can generate their own clients.
+4. **Client:** `openapi-typescript` turns the spec into types, and the frontend calls the API through `openapi-fetch`.
+
+```mermaid
+flowchart LR
+  T[Route table in Bend] --> H[Handlers and codecs]
+  T --> G[Bend spec generator]
+  G --> O[openapi.json]
+  O --> C[Generated TypeScript types]
+  C --> F[Preact frontend]
+  F -->|HTTP| H
+```
+
+An API change is a Bend change. If the frontend's use of the API no longer matches, `tsc` fails.
+
+`openapi.json` and the generated types are committed, and the check regenerates them and fails on any difference. A change to the API therefore always shows up in review.
+
+The spike covered one POST route with strings, numbers, lists and objects. Still to build: path and query parameters, error responses, optional fields, enums, auth schemes, and named components, which the generated TypeScript needs for readable type names.
+
+Live updates use Server-Sent Events, which `openapi-fetch` doesn't handle. Event payloads are still schemas in the route table, and a small typed wrapper around `EventSource` consumes them.
+
+### Frontend project
+
+- **Build:** Vite and Preact, on Node 24 LTS, with TypeScript pinned to 5 for `openapi-typescript`.
+- **Type checking:** `strict`, plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
+- **Linting:** `typescript-eslint` `strictTypeChecked` and `stylisticTypeChecked`, with zero warnings allowed and generated files excluded.
+- **Formatting:** Prettier, enforced by the check.
+- **Testing:** Vitest for units, and Playwright for each role's workflows, running through nginx.
+- **Scripts:** `npm run check` runs type checking, linting, the format check, tests and the spec drift check. `npm run gen:api` regenerates the spec and client.
+- **Development:** Vite runs behind nginx in Compose, so the browser always uses the same HTTPS origin as a real deployment.
+
+The browser calls the proven checker through a Bend module built with `-o .mjs`. Its boundary is a single function taking and returning JSON strings, using the same proven codecs as the API. This avoids hand-mapping Bend's constructors in TypeScript. Its small declaration file is written by hand.
 
 ### Road data without holding it in RAM
 
@@ -99,6 +190,7 @@ Proven in `LAWS.bend`, for the pure core:
 - The optimizer never returns a worse score than its input.
 - Replaying a snapshot plus later events equals replaying the full log.
 - Codecs round-trip.
+- Every encoded API response conforms to its route's schema.
 - Tenant isolation and role permissions hold for every request.
 - Road paths exist in the graph, and their reported cost is correct.
 
@@ -106,11 +198,12 @@ Not proven:
 
 - That routes are optimal. Quality is measured by benchmarks instead.
 - That road times match reality.
-- The IO shell, process wiring and JS UI. These rely on testing.
+- That the emitted `openapi.json` means the same thing as the Bend schema. Contract tests check real responses against the spec instead.
+- The IO shell, process wiring and frontend. These rely on testing.
 
 ## Milestones
 
-Sizes are relative. Each milestone ends with a passing `bend PROOF.bend`.
+Sizes are relative. Each milestone ends with a passing `bend PROOF.bend`, and also `npm run check` once the frontend exists.
 
 ### 1. Core model and proof check (M)
 
@@ -132,11 +225,11 @@ Synthetic data generator, nightly multi-day planning, contractor assignment, bal
 
 **Done when:** a 10,000-appraisal, 1,000-contractor day solves in a proposed 30 minutes, no feasible deadline is missed, and results beat simple baselines. We'll also measure speedup on real solver work and benchmark against OR-Tools.
 
-### 4. Web platform and API (L)
+### 4. Web platform and API (XL)
 
-HTTP/1.1, JSON, routing, event log and snapshots, password and API-key auth, the external API, organizations and roles, and process wiring.
+HTTP/1.1, JSON, the route table and schema-driven codecs, the OpenAPI generator, event log and snapshots, password and API-key auth, the external API, organizations and roles, and process wiring. Also adds the generated client and contract tests to the existing frontend project, so the contract is proven end to end before the UI is built.
 
-**Done when:** simulated dealer clients can create, read and cancel requests, data survives a crash, and tenant isolation is proven.
+**Done when:** simulated dealer clients can create, read and cancel requests using the generated spec, real responses pass contract tests, a breaking API change fails `tsc`, data survives a crash, and tenant isolation is proven.
 
 ### 5. Geocoding (M)
 
@@ -152,17 +245,17 @@ Cancellations, new requests, failed stops, sick contractors, live location, and 
 
 ### 7. Frontend (L)
 
-Admin view (national map, exceptions, overrides, contractors, metrics), requester view (submit, track, cancel, API keys), public booking and tracking pages, and a mobile-friendly contractor view. Includes live updates and instant drag validation by the proven checker.
+A TypeScript and Preact app using the generated API client. Admin view (national map, exceptions, overrides, contractors, metrics), requester view (submit, track, cancel, API keys), public booking and tracking pages, and a mobile-friendly contractor view. Includes live updates and instant drag validation by the proven checker.
 
-**Done when:** each role can complete its full workflow in a browser, and the design holds up in a real review.
+**Done when:** each role can complete its full workflow in Playwright tests and in a browser, `npm run check` passes, and the design holds up in a real review.
 
 ### 8. Full-day demo and Bend scorecard (M)
 
-A simulated national day from intake to the last completed appraisal, with 1,000 contractors, dealer API traffic, cancellations and live screens. Includes crash and load testing, then a written verdict on Bend.
+A simulated national day from intake to the last completed appraisal, with 1,000 contractors, dealer API traffic, cancellations and live screens, all running through the Compose stack. Includes crash and load testing, then a written verdict on Bend.
 
 **Done when:** the full day runs cleanly on this machine, and the scorecard is finished.
 
-Milestones 4, 5 and 7 can overlap once their interfaces are agreed.
+Milestones 5 and 7 can overlap with 4 once the first version of the spec exists.
 
 ## Bend scorecard
 
@@ -173,6 +266,7 @@ Tracked from Milestone 1 onward:
 - Parallel speedup on real work, not synthetic loops
 - Memory and throughput under realistic load
 - Amount of infrastructure that had to be written from scratch
+- How well Bend fits a normal frontend workflow, including API changes reaching TypeScript and any spec drift found by contract tests
 - Developer friction, including compiler errors, missing features and `@unsafe` use
 
 ## Main risks
@@ -181,5 +275,6 @@ Tracked from Milestone 1 onward:
 2. **Proof effort:** untested so far, and it could slow every later milestone.
 3. **Scale of road data in Bend's memory model:** lists and strings are expensive, so performance depends on staying in arrays.
 4. **Geocoding quality:** free address data has gaps, particularly in rural areas.
-5. **Phone GPS:** browsers allow geolocation only on HTTPS or localhost, so a phone can't reach a plain local server. The fleet will use simulated locations, and a real-phone test needs a local TLS proxy.
+5. **Phone GPS:** browsers allow geolocation only on trusted HTTPS or localhost. nginx provides HTTPS, but a phone won't trust the self-signed certificate, so a real-phone test needs a certificate the phone trusts. The fleet will use simulated locations.
 6. **Local-only hosting:** no real outside dealer can reach the API, so the demo relies on simulated clients.
+7. **Schema law at full scale:** the spike's law compared field names by length only, because Base has `String.eq` but no proof that it's reflexive. The real law needs that lemma, and proof effort on the full schema is unknown.

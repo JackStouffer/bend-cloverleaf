@@ -21,14 +21,30 @@ All work is done in main. No need to go through branching/pull request formaliti
 
 ## Commands
 
+Run the app from the repo root. Everything goes through nginx at https://localhost:8443, including local development and testing, so don't call the backend directly.
+
+```bash
+docker compose up --build                                # real-world run with the built frontend
+docker compose -f compose.yaml -f compose.dev.yaml watch # development with hot reload
+```
+
+Run these from `backend/`, and write build output to `backend/build/`:
+
 ```bash
 bend PROOF.bend                       # the proof gate
 bend PROOF.bend --verdict             # recheck with the proven kernel
 bend file.bend --check-only           # check without running
-bend file.bend -o out                 # build a native binary
-./out +RTS --threads 12 -RTS          # run on 12 CPU threads
-bend page.html -o dist                # bundle a page that imports .bend files
+bend file.bend -o build/out           # build a native binary
+./build/out +RTS --threads 12 -RTS    # run on 12 CPU threads
+bend file.bend -o file.mjs            # build an ES module of non-IO defs for the frontend
 bend base Map                         # look up a name in Base
+```
+
+Run these from `frontend/`, on Node 24:
+
+```bash
+npm run check                         # types, lint and format, plus tests and spec drift when added
+npm run gen:api                       # regenerate openapi.json and the typed client, once added
 ```
 
 ## Laws and proofs
@@ -43,8 +59,14 @@ bend base Map                         # look up a name in Base
 
 - Keep pure logic and IO in separate modules, with as little logic in the IO shell as possible.
 - Slow pure work blocks the whole event loop, so heavy work never runs in the web process. Web, solver and road lookups are separate processes.
-- Prefer `Nat` fuel for long-running loops. Use `@unsafe` only when fuel won't work, and only in the IO shell.
-- Everything is in Bend except the browser UI, which is plain JS calling non-IO Bend defs. Ask before adding an outside dependency or a C effect, because foreign code fails `--verdict`.
+- Use `Nat` fuel for long-running loops, with a continuation for the next step, as in `backend/web/main.bend`. This passes the proof gate, so use `@unsafe` only when fuel can't work, and only in the IO shell.
+- nginx is the only public entry point. It handles TLS and static files, and backend services stay on the internal Docker network.
+- Keep local setup matching a real deployment. Don't add dev-only shortcuts that skip nginx or TLS.
+- Each process gets its own Compose service. Secrets come from a gitignored `.env` file, never from images or Compose files.
+- The backend is all Bend. Ask before adding an outside backend dependency or a C effect, because foreign code fails `--verdict`.
+- The frontend is TypeScript and Preact in `frontend/`. Keep it strict: no `any`, no lint suppressions to get a check passing, and zero ESLint warnings.
+- The Bend route table is the single source of truth for the API. Change the route table, then run `npm run gen:api`. Never hand-edit `openapi.json` or the generated types.
+- The frontend calls the API only through the generated client, apart from the typed Server-Sent Events wrapper.
 - Bend's JS target runs sequentially, so don't plan on parallel work in the browser.
 
 ## Data and performance

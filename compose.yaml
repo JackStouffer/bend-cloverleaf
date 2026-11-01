@@ -1,0 +1,42 @@
+name: cloverleaf
+
+services:
+  web:
+    build:
+      context: backend
+    init: true
+    restart: unless-stopped
+    expose:
+      - "8080"
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8080 &&
+          printf 'GET /api/health HTTP/1.1\r\nHost: localhost\r\n\r\n' >&3 &&
+          grep -q '200 OK' <&3
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/nginx/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+      - "8443:443"
+    environment:
+      PUBLIC_HTTPS_PORT: "8443"
+    volumes:
+      - certs:/etc/nginx/certs
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  certs:
