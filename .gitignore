@@ -1,0 +1,27 @@
+# Secrets and local config
+.env
+.env.*
+*.pem
+*.key
+.claude/settings.local.json
+
+# Build output
+build/
+dist/
+*.gpu
+*.bendtt
+
+# Large downloaded and generated data
+data/
+*.pbf
+*.bin
+
+# Runtime state
+*.log
+*.wal
+*.snapshot
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
