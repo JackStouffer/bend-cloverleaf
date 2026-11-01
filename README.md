@@ -12,7 +12,7 @@ Cloverleaf is meant to push on the places a real app would:
 
 - **Proofs:** can business rules such as "no appraisal is on two routes" be proven at a reasonable cost, and do those proofs survive changing requirements?
 - **Parallelism:** does real optimization work speed up across cores, or only synthetic loops?
-- **Scale:** can Bend process a national road network on an ordinary workstation?
+- **Scale:** can Bend route across a national road network inside the 8GB of an ordinary server?
 - **Everyday web work:** how painful is it to build HTTP, JSON, auth and storage, none of which Bend's base library includes?
 
 The project will end with a written scorecard on Bend, covering what worked, what didn't, and what the proofs did and didn't catch. A failed experiment still counts as a useful result.
@@ -23,7 +23,7 @@ Cloverleaf is a route planner for a fictional auto appraisal company with about 
 
 This is the traveling salesman problem with a lot of real-world constraints:
 
-- Each contractor covers a set of zip codes, and those sets often overlap, so the planner also chooses who does each appraisal.
+- Each contractor covers a set of zip codes in one state, and those sets often overlap, so the planner also chooses who does each appraisal.
 - Each appraisal takes about 20 minutes and has a deadline date.
 - Contractors have daily hour limits and availability calendars.
 - The system handles 5,000-10,000 appraisals per day.
@@ -36,7 +36,7 @@ This is the traveling salesman problem with a lot of real-world constraints:
 - An external API for dealers and other apps to submit and cancel requests
 - Separate views for admins, requesters and contractors, with live updates
 - Public booking and tracking pages for individuals
-- Road routing and address lookup built from OpenStreetMap and US Census data, written in Bend
+- Road routing and address lookup built from OpenStreetMap and US Census data, written in Bend, with a Node script preparing the raw data before deploy
 
 The backend will be written entirely in Bend. The frontend will be a TypeScript and Preact app with strict type checking, strict ESLint and Prettier, just as a real team would set it up. Bend will generate the API's OpenAPI spec, and the frontend will call the API through a typed client generated from that spec. The company and all of the data are synthetic.
 

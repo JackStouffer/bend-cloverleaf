@@ -27,6 +27,10 @@ Run the app from the repo root. Everything goes through nginx at https://localho
 ```bash
 docker compose up --build                                # real-world run with the built frontend
 docker compose -f compose.yaml -f compose.dev.yaml watch # development with hot reload
+node scripts/fetch-road-data.mjs                          # download the US .pbf and state outlines to data/osm
+node scripts/road-build.mjs data/osm/us-latest.osm.pbf data/osm/outlines data/road  # build per-state road records
+node scripts/check-road-data.mjs data/road                # check the output against its format
+node --test "scripts/*.test.mjs"                         # test the Node scripts
 ```
 
 Run these from `backend/`, and write build output to `backend/build/`:
@@ -62,12 +66,14 @@ npm run gen:api                       # regenerate openapi.json and the typed cl
 ## Architecture rules
 
 - Keep pure logic and IO in separate modules, with as little logic in the IO shell as possible.
+- Contractors never work across a state line. An `Instance` is one state, so overflow can't leave it, and the national solve is one independent instance per state.
 - Slow pure work blocks the whole event loop, so heavy work never runs in the web process. Web, solver and road lookups are separate processes.
 - Use `Nat` fuel for long-running loops, with a continuation for the next step, as in `backend/web/main.bend`. This passes the proof gate, so use `@unsafe` only when fuel can't work, and only in the IO shell.
 - nginx is the only public entry point. It handles TLS and static files, and backend services stay on the internal Docker network.
 - Keep local setup matching a real deployment. Don't add dev-only shortcuts that skip nginx or TLS.
 - Each process gets its own Compose service. Secrets come from a gitignored `.env` file, never from images or Compose files.
-- The backend is all Bend. Ask before adding an outside backend dependency or a C effect, because foreign code fails `--verdict`.
+- The backend is all Bend, except `scripts/road-build.mjs`, which decodes the `.pbf` before deploy. The app never runs it. Ask before adding an outside backend dependency or a C effect, because foreign code fails `--verdict`.
+- Don't add Python. Any supporting script is written for Node.js, which the frontend already needs.
 - The frontend is TypeScript and Preact in `frontend/`. Keep it strict: no `any`, no lint suppressions to get a check passing, and zero ESLint warnings.
 - The Bend route table is the single source of truth for the API. Change the route table, then run `npm run gen:api`. Never hand-edit `openapi.json` or the generated types.
 - The frontend calls the API only through the generated client, apart from the typed Server-Sent Events wrapper.
@@ -77,7 +83,12 @@ npm run gen:api                       # regenerate openapi.json and the typed cl
 
 - Keep large data in `Array<U32>` (about 4 bytes per slot) or fixed-size records. Lists cost a cell per element and `String` about 24 bytes per character, so convert early.
 - `File.size` fails above 4GB and `File.read_at` takes a `U32` offset. Keep runtime data files under 4GB. Sequential reads work past 4GB.
-- Never load the whole road network into RAM. This machine has 15GB, and data should be streamed or loaded by region.
+- The whole stack must run in 8GB, even though this machine has 15GB. Each service has a hard cap, listed in PLAN.md. Test against it with `systemd-run --user --scope -q -p MemoryMax=2G -p MemorySwapMax=0 <command>`.
+- Never load the whole road network into RAM. Stream it, or load one state at a time.
+- Each search lane copies the state's graph, so set lanes from the state's size. Texas fits 4 lanes under the 1GB `road` cap, not 8.
+- Bend's heap never shrinks, and freed memory is reused only at the same power-of-two size, so peak use per size lasts until exit. Use fixed-size arrays, reuse them, and give each batch pass its own process.
+- Bend has no heap limit, so going over a cap gets the process killed with no error. Size every buffer and batch up front.
+- Read files in small chunks and consume them as they arrive. Holding whole files as `List`s is about 4x slower and costs 16 bytes per byte.
 - `U32` is the widest integer in Base and it wraps silently. Check for overflow in totals and offsets, and remember that OSM node IDs need more than 32 bits.
 - Parallel calls need balanced work, because tasks are never moved once assigned. Split by estimated cost, not by count.
 - When cost can't be estimated, fork far more tasks than cores, and sweep the fork depth rather than guessing it.
@@ -97,6 +108,8 @@ npm run gen:api                       # regenerate openapi.json and the typed cl
 - `%e : P` with `e : {a == b : T}` replaces `b` in the goal with `a`. Use `Equal.sym` to go the other way.
 - A for-all hypothesis is an affine closure and can only be used once. State it as a `Bool` over a list, because equality proofs are `Data`.
 - A literal fuel inside a def can hang the checker with no message. Pass fuel as a parameter to anything a law mentions.
+- An unsafe IO loop split across two defs can pass the checker and then fail in clang with an undeclared `spin_N`. Use one recursive def with pure helpers.
+- A pair from a computed value can't be destructured in the same def, so each array read needs its own helper def.
 - State laws in plain numbers, not through the helper being tested, or a bug in the helper changes the law with it.
 
 ## Benchmarks
