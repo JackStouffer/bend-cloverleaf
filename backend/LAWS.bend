@@ -6,6 +6,10 @@ import ./core/route.bend as R
 import ./core/plan.bend as P
 import ./core/heal.bend as H
 import ./core/solve.bend as S
+import ./road/spec.bend as Sp
+import ./road/search.bend as RS
+import ./road/path.bend as RP
+import ./road/lanes.bend as RL
 
 # The rules Cloverleaf has to keep, as claims over the pure core. PROOF.bend proves
 # each one, and `bend PROOF.bend` fails until every claim holds.
@@ -390,3 +394,95 @@ law parallel_check_matches_sequential:
   for +inst: T.Instance
   for +plan: T.Plan
   {P.Plan.check(inst, plan) == P.Plan.valid(inst, plan) : Bool}
+
+# Roads
+# -----
+
+# Base defines Array as a tree in plain Bend, and the runtime swaps in flat
+# memory. Everything below rests on this: a read hands back the same array, and
+# the word it reports is the one At says is there.
+law reading_changes_nothing:
+  for a: Array<U32>
+  for +i: U32
+  {(a, Sp.At(a, i)) == Array.get(U32, a, i) : Array<U32> & U32}
+
+# If the check reports a cost, the path starts at src, ends at dst, every arc
+# leaves the node the walk has reached, and the arcs' costs add up to that cost.
+law checked_path_walks_the_graph:
+  for g: Array<U32>
+  for +n: U32
+  for +src: U32
+  for +dst: U32
+  for +path: List<&2, U32>
+  for +c: Nat
+  for +e: {RP.Walked.cost(RP.Path.check(g, n, src, dst, path)) == Some{c} : Maybe<&2, Nat>}
+  Sp.Walks(path, g, n, src, dst, 0n, c)
+
+# Nothing about the search is proven beyond keeping the graph, and nothing has to
+# be: whatever it did, a time only gets reported with a path that walks the graph
+# at exactly that cost.
+law reported_time_walks_the_graph:
+  for g: Array<U32>
+  for w: Array<U32>
+  for +fuel: Nat
+  for +n: U32
+  for +limit: U32
+  for +src: U32
+  for +dst: U32
+  for +stamp: U32
+  for +c: Nat
+  for +e: {RP.Cell.cost(RP.Cell.read(g, w, fuel, n, limit, src, dst, stamp)) == Some{c} : Maybe<&2, Nat>}
+  Sp.Walks(RP.Cell.path(RP.Cell.read(g, w, fuel, n, limit, src, dst, stamp)), g, n, src, dst, 0n, c)
+
+law reported_time_within_limit:
+  for g: Array<U32>
+  for w: Array<U32>
+  for +fuel: Nat
+  for +n: U32
+  for +limit: U32
+  for +src: U32
+  for +dst: U32
+  for +stamp: U32
+  for +c: Nat
+  for +e: {RP.Cell.cost(RP.Cell.read(g, w, fuel, n, limit, src, dst, stamp)) == Some{c} : Maybe<&2, Nat>}
+  {Nat.is_le(c, U32.to_nat(limit)) == True{} : Bool}
+
+# A lane threads one graph through every search and lookup, so these two make
+# every time in a row a walk of the graph that was loaded.
+law search_keeps_the_graph:
+  for g: Array<U32>
+  for w: Array<U32>
+  for +fuel: Nat
+  for +hf: Nat
+  for +n: U32
+  for +cap: U32
+  for +limit: U32
+  for +src: U32
+  for +stamp: U32
+  {g == RS.Out.graph(RS.Search.run(fuel, hf, g, w, n, cap, limit, src, stamp)) : Array<U32>}
+
+law lookup_keeps_the_graph:
+  for g: Array<U32>
+  for w: Array<U32>
+  for +fuel: Nat
+  for +n: U32
+  for +limit: U32
+  for +src: U32
+  for +dst: U32
+  for +stamp: U32
+  {g == RP.Cell.graph(RP.Cell.read(g, w, fuel, n, limit, src, dst, stamp)) : Array<U32>}
+
+# Lanes get their sources one by one and hand back rows the same way, so a batch
+# loses nothing and comes back in order however many lanes ran it.
+law dealing_keeps_every_job:
+  for xs: List<&2, U32>
+  {xs == RL.Deal.undo(U32, RL.Deal.split(U32, xs)) : List<&2, U32>}
+
+# Bend has no heap limit, so this is the only thing between a bad lane depth and
+# a killed machine: the deepest tree the shell allows fits in the budget.
+law lanes_fit_the_budget:
+  for +k: Nat
+  for +per: Nat
+  for +budget: Nat
+  for +e: {Nat.is_le(per, budget) == True{} : Bool}
+  {Nat.is_le(Nat.mul(Nat.pow(2n, RL.Lanes.fit(k, per, budget)), per), budget) == True{} : Bool}

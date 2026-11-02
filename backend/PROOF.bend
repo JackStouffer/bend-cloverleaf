@@ -14,6 +14,7 @@ import ./proof/plan.bend as PP
 import ./proof/rules.bend as PR
 import ./proof/events.bend as PE
 import ./proof/solve.bend as PS
+import ./proof/road.bend as PRo
 
 # Proves every law in LAWS.bend. The working lemmas live in proof/, and this file
 # only connects them to the claims.
@@ -157,3 +158,27 @@ def Laws.parallel_search_matches_sequential(t, d, cap, job, outside):
 
 def Laws.parallel_check_matches_sequential(inst, plan):
   PS.check_valid(inst, plan)
+
+def Laws.reading_changes_nothing(a, i):
+  PRo.read.law(a, i)
+
+def Laws.checked_path_walks_the_graph(g, n, src, dst, path, c, e):
+  PRo.walk.sound(path, g, n, src, dst, 0n, c, e)
+
+def Laws.reported_time_walks_the_graph(g, w, fuel, n, limit, src, dst, stamp, c, e):
+  PRo.told.walks(g, w, fuel, n, limit, src, dst, stamp, c, e)
+
+def Laws.reported_time_within_limit(g, w, fuel, n, limit, src, dst, stamp, c, e):
+  PRo.told.limit(g, w, fuel, n, limit, src, dst, stamp, c, e)
+
+def Laws.search_keeps_the_graph(g, w, fuel, hf, n, cap, limit, src, stamp):
+  PRo.keeps(fuel, hf, g, w, n, cap, limit, src, stamp)
+
+def Laws.lookup_keeps_the_graph(g, w, fuel, n, limit, src, dst, stamp):
+  PRo.lookup.keeps(g, w, fuel, n, limit, src, dst, stamp)
+
+def Laws.dealing_keeps_every_job(xs):
+  PRo.deal.back(xs)
+
+def Laws.lanes_fit_the_budget(k, per, budget, e):
+  PRo.budget.fits(k, per, budget, e)

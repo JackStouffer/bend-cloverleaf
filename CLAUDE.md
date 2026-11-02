@@ -31,6 +31,8 @@ node scripts/fetch-road-data.mjs                          # download the US .pbf
 node scripts/road-build.mjs data/osm/us-latest.osm.pbf data/osm/outlines data/road  # build per-state road records
 node scripts/check-road-data.mjs data/road                # check the output against its format
 node --test "scripts/*.test.mjs"                         # test the Node scripts
+node scripts/check-road-matrix.mjs check data/road/texas points.bin matrix.bin 36000  # compare a matrix with a separate implementation
+docker compose run --rm road-build                       # fetch and build the road data in Compose, once Docker is here
 ```
 
 Run these from `backend/`, and write build output to `backend/build/`:
@@ -46,6 +48,9 @@ bend base Map                         # look up a name in Base
 bend test/scenario.bend -o build/scenario && ./build/scenario        # concrete scenarios
 bend solver/main.bend -o build/solver                                # build the benchmark
 ./build/solver +RTS --threads 4 -RTS 1000 10000 7                    # crews, jobs, days
+bend road/main.bend -o build/road                                    # build the road process
+./build/road +RTS --threads 12 -RTS bench ../data/road/texas 100 36000 2                     # searches, limit, lane depth
+./build/road +RTS --threads 12 -RTS matrix ../data/road/texas points.bin matrix.bin 36000 2  # points, output, limit, lane depth
 ```
 
 Run these from `frontend/`, on Node 24:
@@ -87,10 +92,12 @@ npm run gen:api                       # regenerate openapi.json and the typed cl
 - Never load the whole road network into RAM. Stream it, or load one state at a time.
 - Each search lane copies the state's graph, so set lanes from the state's size. Texas fits 4 lanes under the 1GB `road` cap, not 8.
 - Bend's heap never shrinks, and freed memory is reused only at the same power-of-two size, so peak use per size lasts until exit. Use fixed-size arrays, reuse them, and give each batch pass its own process.
-- Bend has no heap limit, so going over a cap gets the process killed with no error. Size every buffer and batch up front.
+- Bend has no heap limit, so going over a cap gets the process killed with no error, and with no cap a bad size can reboot the whole machine. Size every buffer and batch up front, and check any size that comes from outside before allocating.
+- Run compiled Bend under `systemd-run --user --scope -q -p MemoryMax=... -p MemorySwapMax=0`. Delete the old binary before rebuilding and use `set -o pipefail`, because `bend ... | tail` hides a failed build and leaves a stale binary to run.
 - Read files in small chunks and consume them as they arrive. Holding whole files as `List`s is about 4x slower and costs 16 bytes per byte.
 - `U32` is the widest integer in Base and it wraps silently. Check for overflow in totals and offsets, and remember that OSM node IDs need more than 32 bits.
 - Parallel calls need balanced work, because tasks are never moved once assigned. Split by estimated cost, not by count.
+- A fork tree must end in a parallel call to a def that never forks. A def that can fork runs while the tree grows, on a couple of threads, even in its base case, so leaves wait for each other.
 - When cost can't be estimated, fork far more tasks than cores, and sweep the fork depth rather than guessing it.
 - Values marked `+` and read by every lane cost an atomic per read.
 - This machine can't build GPU code, and `!` builds silently produce no `.gpu` file. Don't use `!`.
@@ -111,6 +118,9 @@ npm run gen:api                       # regenerate openapi.json and the typed cl
 - An unsafe IO loop split across two defs can pass the checker and then fail in clang with an undeclared `spin_N`. Use one recursive def with pure helpers.
 - A pair from a computed value can't be destructured in the same def, so each array read needs its own helper def.
 - State laws in plain numbers, not through the helper being tested, or a bug in the helper changes the law with it.
+- A proof can't use an array twice and dead evidence doesn't count. `copy` and `reads` in `proof/road.bend` hand back live copies with evidence, so use those.
+- Each array read in a hot loop can be one mode of a single `Nat`-fuel def, with the read's pair as a parameter. It compiles to a flat loop, as `road/search.bend` shows.
+- `+` on a field of a dependent pair fails with "cannot infer". Pass the field to a helper with a `+` parameter.
 
 ## Benchmarks
 

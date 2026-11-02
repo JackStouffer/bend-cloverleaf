@@ -18,15 +18,18 @@ WORKDIR /src
 COPY . .
 RUN bend PROOF.bend \
   && bend web/main.bend --check-only \
+  && bend road/main.bend --check-only \
   && mkdir -p /out \
   && bend test/scenario.bend -o /out/scenario \
   && /out/scenario \
-  && bend web/main.bend -o /out/web
+  && bend web/main.bend -o /out/web \
+  && bend road/main.bend -o /out/road
 
 FROM ubuntu:24.04
 
 RUN useradd --system --no-create-home cloverleaf
 COPY --from=build /out/web /usr/local/bin/web
+COPY --from=build /out/road /usr/local/bin/road
 USER cloverleaf
 EXPOSE 8080
 CMD ["web", "+RTS", "--threads", "2", "-RTS"]

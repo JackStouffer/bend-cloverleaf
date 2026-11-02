@@ -96,8 +96,13 @@ Tested on Bend 2.0.39 on this machine (6 cores, 12 threads, 15GB RAM, 926GB free
 | In Georgia (358MB), service roads are 44% of road nodes and 68% of graph nodes | Dropping service roads shrinks the graph 3x |
 | Stopping a graph at the state line gave wrong drive times. Compared with a graph of the whole South, across 53M Georgia pairs, no margin left 1.85% of near-border pairs unreachable. 20km still left trips up to 26 minutes too slow. At 40km every pair matched exactly, for 37% more graph | Each state's graph runs 40km past its border. This was measured on Georgia only, and Geofabrik's state extracts can't be used, because they stop at about the border |
 | Bend's road search matched Node's settled counts exactly on real Georgia and Texas graphs. A one-hour search took 38-41ms on one thread, about 1.5x slower than Node, and Texas loaded in 0.22s | A whole state fits in memory and searches fast, so regions and an overlay aren't needed. This spike was `@unsafe`, read adjacency arrays built by Node, and used a hand-written def per array read |
-| Each search lane needs its own copy of the graph, because an array has one owner. Georgia used 49MB per lane, and Texas 128MB. In Texas, 4 lanes fit in 544MB, and 8 lanes were killed by the 1GB cap | Lanes per state have to be set from the state's size |
-| 800 searches on Georgia took 30.2s on 1 lane, 16.4s on 2, 15.9s on 4, 6.0s on 8 and 5.8s on 16. 4 lanes gained nothing over 2, and we don't know why yet. Tasks never move, so uneven lanes are one suspect | Expect about 5x from 8 lanes, and sweep lane counts on real work |
+| Each search lane needs its own copy of the graph, because an array has one owner. A Texas lane takes 134MB, so 4 lanes peak at 546MB, and 8 would go over the 1GB cap | `road` works out what fits from the array sizes and refuses more before it copies anything. Lanes range from 4 in Texas to 64 in small states |
+| The spike's 800 searches on Georgia took 30.2s on 1 lane, 16.4s on 2, 15.9s on 4 and 6.0s on 8. Lanes weren't uneven. The runtime skips no-fork defs while a fork tree grows, but runs any def that can fork, so a lane inside a forking def's base case ran during the grow, on only 2 rows of threads. With a direct parallel call to a no-fork def, the same work took 19.9s, 11.7s, 6.7s and 4.3s on the real graph, against 17.9s, 9.9s, 9.9s and 6.3s for the old shape in the same run | A fork tree must end in a parallel call to a def that never forks. Expect 4.4x from 8 lanes. The rest of the gap is memory: 6 cores, with a shared 32MB L3 under graphs larger than that |
+| A road search written as one `Nat`-fuel def per loop passes the gate and compiles to flat loops, with the last read passed as a pair parameter. Texas took 34.7ms per search on one thread against the `@unsafe` spike's 38-41ms, and matched Node's settled counts exactly | Passing the gate cost no speed. Go/no-go for Milestone 2 passes |
+| Bend builds Texas's adjacency from `edges.bin` in 1.45s, in two passes. All 49 states loaded and searched under a hard 1GB cap, peaking at 152MB on one lane | The road process needs nothing precomputed but the road records |
+| A heap capacity of 2^20 entries is far above what real searches use: 530 entries at most in Delaware | Capacity is checked on every push and a full heap fails the search, so nothing wraps |
+| A Texas matrix of 1,000 stops took 12.1s on 4 lanes, with every reached cell's path walked and checked, peaking at 600MB. All 1,000,000 cells matched an independent Node implementation | Checking every reported time costs almost nothing, because the 1-hour limit leaves only 8% of cells reachable |
+| A bad lane depth was killed by a 2GB cgroup cap within 30s, cloning the graph without limit. Run with no cap, the same command is the likely cause of two reboots of the whole WSL machine | Going over budget can take the machine down, not just the process. Pure budget checks run before any allocation, and every binary runs under a `MemoryMax` cap with `MemorySwapMax=0` |
 | Solving 10,000 jobs as 48 population-weighted states took 1.6s in total on one thread, against 19.3s as one national instance, and the largest state took 0.34s. These were separate runs on synthetic data with straight-line times | One solve per state is about 12x cheaper, and could finish in about 0.34s on 6 or more cores against 5.3s today |
 | Geofabrik's `.pbf` is sorted by type: Delaware has 350 node blocks, then 40 way blocks, then 1 relation block | One pass can't work, because a node's use isn't known until after it's been read |
 | `us-latest.osm.pbf` is 12.2GB. In Delaware, data expands 2.55x, the largest block is 1.6MB, road nodes are 25.8% of all nodes, and node IDs reach 34 bits | The US file can only be read sequentially, and most nodes can be dropped early |
@@ -125,7 +130,7 @@ backend/    Bend code, LAWS.bend, PROOF.bend, Dockerfile
   proof/    Lemmas behind PROOF.bend
   test/     Concrete scenarios the laws don't cover
   solver/   Benchmark shell and synthetic instances, later the solver process
-  road/     Road process (planned)
+  road/     Road process: graph build, search, path checks, snapping and lanes, with an IO shell
 frontend/   TypeScript and Preact npm project
 scripts/    Node scripts that run before deploy, with their tests
 deploy/     nginx image and config
@@ -142,13 +147,14 @@ Compose runs the app the way a real deployment would, so nothing talks to the ba
 |---|---|
 | `nginx` | TLS on port 8443, redirect from 8080, static frontend, proxy to the backend |
 | `web` | Bend web process, built in a multi-stage image with Bend pinned by checksum |
-| `solver`, `road` | Added in Milestones 2 and 3, with a shared data volume |
+| `road` | Batch lookups, run one state at a time under a Compose profile, each run its own process, because Bend's heap never shrinks. Shares the backend image |
+| `solver` | Added in Milestone 3, with the shared data volume |
 | `road-build` | One-shot Node job that turns the `.pbf` into per-state road records. Has its own image, so the Bend images stay free of Node. Runs under a Compose profile, not on `up` |
 | `frontend` | Development only. Vite with hot reload behind nginx |
 
 - **Real-world run:** `docker compose up --build` serves the built frontend, and is what Playwright, contract and load tests target.
 - **Development:** `docker compose -f compose.yaml -f compose.dev.yaml watch` keeps the same nginx and TLS path, swaps in Vite, and rebuilds the backend on change.
-- **Images:** the backend image fails to build if `bend PROOF.bend`, the Bend check or the scenarios fail. This hasn't run on Docker yet.
+- **Images:** the backend image fails to build if `bend PROOF.bend`, the Bend checks or the scenarios fail. `road-build` has its own image from `scripts/`. None of this has run on Docker yet.
 - **Certificates:** nginx creates a self-signed certificate in a Docker volume on first start. No key is ever committed.
 - **Secrets:** later secrets come from a gitignored `.env` file, never from the images or Compose files.
 - **Backend protection:** nginx buffers requests and limits body size, so slow or oversized clients never reach Bend's event loop. Server-Sent Events will need a route with buffering turned off.
@@ -217,22 +223,22 @@ Each folder has three files of little-endian `U32` words, each under 4GB so Bend
 
 There are no regions or overlay. A state's graph comes to at most 49MB of adjacency, so the road process loads a whole state into memory and runs a bounded search from each stop. A trip never leaves its state, so nothing needs to cross the country.
 
-Service roads stay out of the routing graph. A stop on one snaps to the nearest public road, which slightly understates the last few hundred meters. Road shapes stay in their own file, read only when drawing a route.
+`road matrix` takes stops as coordinates, snaps each to its nearest node through a hash grid of 0.02 degree cells, and writes a matrix of drive times. Service roads stay out of the routing graph. A stop on one snaps to the nearest public road, which slightly understates the last few hundred meters. Road shapes stay in their own file, read only when drawing a route.
 
 Two things in the road records still need checking against the reference router. Roads tagged `access=private` aren't filtered out yet, and default speeds by road class are first guesses.
 
-At runtime, the road process holds one state at a time. The nightly solve knows all its lookups up front, so it loads each state once, runs its searches, and writes that state's travel-time matrices. The solver reads those instead of touching the graph. Same-day repairs need only a few searches in the contractor's state. Lanes are set per state from its size, because each lane copies the graph.
+At runtime, the road process holds one state at a time. The nightly solve knows all its lookups up front, so it loads each state once, runs its searches, and writes that state's travel-time matrices. The solver reads those instead of touching the graph. Same-day repairs need only a few searches in the contractor's state, and still need a long-running road service in Milestone 6. Lanes are set per state from its size, because each lane copies the graph, and `road` refuses a depth that doesn't fit a 900MB budget.
 
 Scaling from Texas, about 11,000 one-hour searches a night take about 7 minutes on one thread, before any parallel speedup. A repair needing 10 searches takes about 0.4s.
 
-Proposed caps, set with Compose `mem_limit` and checked on real runs:
+Caps, set with Compose `mem_limit` and an equal `memswap_limit`. `road` and `road-build` have been checked on real runs with `systemd-run`, but not yet on Docker:
 
 | Service | Cap | Basis |
 |---|---|---|
 | `nginx` | 64MB | Static files and proxying |
 | `web` | 512MB | Unmeasured until Milestone 4 |
 | `solver` | 2GB | 44MB today on straight-line times, before matrices and events |
-| `road` | 1GB | Texas ran 4 lanes in 544MB. 8 lanes was killed at 1GB |
+| `road` | 1GB | Texas ran 4 lanes in 546MB, and 600MB on a 1,000-stop matrix. All 49 states pass on one lane |
 | `road-build` | 1GB | 564MB on the full US. Run only to refresh data |
 | OS and page cache | About 3.3GB | Whatever is left |
 
@@ -255,8 +261,14 @@ Proven so far in `LAWS.bend`, for the pure core:
 - Every stop on a route is in the contractor's state, including out-of-zip work.
 - A request from another state changes nothing.
 - Parallel and sequential selection give the same answer.
+- A reported drive time is the exact cost of a path that really walks the graph from source to destination, within the limit.
+- Searches and lookups leave the graph unchanged, and reading an array changes nothing.
+- Dealing work to lanes loses nothing and merges back in order.
+- The lane depth the shell allows fits its memory budget.
 - The optimizer never returns a worse score than its input.
 - The planner only considers open routes, on or before the deadline, with the hours left, and only urgent work leaves its zips.
+
+Road times use the same idea as `publish`. The search isn't proven to find anything, so a lookup walks the path it left behind against the graph and reports only what that walk confirms. A search bug shows up as a refused lookup, which the shell won't report, never as a wrong time. `Array` is a tree in Base, so laws can reason about reads directly. An array can't be copied in a proof, so `proof/road.bend` proves the Base clone gives two provably equal live copies and builds on that.
 
 Healing is proven by construction: every edit rebuilds the route through `Route.remake`, so no runtime guard is involved, apart from the check that a reorder holds the same stops. The planner is the opposite. It isn't proven to build a valid plan. `publish` runs the proven checker on the result and falls back to the trivial plan, so what leaves is always valid, but a planner bug would show up as an empty plan instead of a failed proof.
 
@@ -266,11 +278,12 @@ Still to prove:
 - Codecs round-trip.
 - Every encoded API response conforms to its route's schema.
 - Tenant isolation and role permissions hold for every request.
-- Road paths exist in the graph, and their reported cost is correct.
 
 Not proven:
 
 - That routes are optimal. Quality is measured by benchmarks instead.
+- That a road search finds the shortest time, or finds a path at all. `test/scenario.bend` compares it with Bellman-Ford, and `scripts/check-road-matrix.mjs` with a separate Dijkstra.
+- That the adjacency build or snapping is right. They rely on the scenarios and the same script.
 - That the planner places work at all. A valid plan may leave everything in the backlog, so `test/scenario.bend` covers this.
 - That the planner handles the tightest deadline first. Also covered by the scenarios.
 - That road times match reality. No law looks inside the travel time function, so swapping in real road times changes no proof.
@@ -293,10 +306,11 @@ Domain types, plan validity, the appraisal lifecycle, and the checker, with a sm
 
 ### 2. Road network (XL)
 
-The Node road build is done for the whole country, one folder per state. What's left is its Compose job, adjacency and batch travel-time queries in Bend, and the comparison with a reference router. Start with one state, then the rest.
+The Node road build is done for the whole country, one folder per state, and its Compose job is written. The road process builds adjacency and answers batch travel-time queries in Bend. What's left is the comparison with a reference router.
 
 **Done when:** the road process serves lookups for its largest state under a hard 1GB cap, and a sample of routes is within an agreed margin of a reference router. The lower-48 road build already completes under its hard 1GB cap.
 **Go/no-go:** if a gate-passing search is too slow or too large for Texas, reduce lanes first, then graph detail.
+**Status:** go. The gate-passing search beats the spike on Texas and fits the cap. Still open: which reference router to use and its margin, the `access=private` filter and default speeds that depend on it, and a first real run of Compose.
 
 ### 3. National solver (L)
 
@@ -419,6 +433,41 @@ A throwaway decoder, written to test whether inflate belongs in Bend. Its decode
 - **Mutual recursion:** a decode loop is naturally a set of states that tail-call each other, which only works under `@unsafe`. A version that passes the gate has to fold them into one `Nat`-fuel def with a mode argument.
 - **Good:** a plain fork tree over identical blocks scaled 4.4x to 6.2x on 12 threads with no tuning.
 
+### Milestone 2 road process
+
+Written from the spike, with no `@unsafe` in it.
+
+| Measure | Result |
+|---|---|
+| Laws | 50, up from 42 |
+| Road code | 1,101 lines of pure Bend and a 378-line IO shell |
+| Proofs | 1,057 lines and 157 defs and lemmas, or 1.0 proof line per line of pure code |
+| Proof gate | Still 0.65s, and `--verdict` passes |
+| `@unsafe` or foreign code | None |
+
+**Bugs**
+
+Proofs caught no bug in the code as written. Three real bugs got past them or sat outside them, and each was found another way:
+
+- **Crash:** `road` took any lane depth. A failed build hidden by `| tail` left a stale binary running with new arguments, which read 36000 as a lane depth and cloned the graph without limit. The same command under a cap was an OOM kill, and uncapped it's the likely cause of the machine rebooting twice. No law could flag a check that didn't exist. `lanes_fit_the_budget` was written afterwards.
+- **Row order:** the shell reversed its points one time too many, so every row was in the wrong place. Rows matched across lane counts, and the laws don't cover the shell. `check-road-matrix.mjs` caught it on the first run.
+- **Fuel:** the path walk spent 3 fuel per hop and was given 1 per node. Real graphs are too large to hit this. A 5-node scenario hit it, and the lookup was refused instead of being wrong, which is the design working.
+
+A self-review also caught an off-by-one in the budget before it ran. A mutation later showed that the new law catches it.
+
+**Injected bugs**
+
+We injected 29. `bend PROOF.bend` caught 20 and `test/scenario.bend` caught 9, after adding scenarios for 2 that first survived. Heap order is one: the search drains its heap and re-expands improved nodes, so a broken heap still gives right answers, only slower. The new scenario counts settled nodes, which is how that shows up. Two of the 20 tripped `keep`, which mirrors the search's arms, not a law, so they count as a proof script no longer matching.
+
+**Friction**
+
+- **Arrays in proofs:** a read needs the array live, evidence must come from live code, and a proof can't use an array twice. Erased lets don't help, since dead evidence doesn't count. The way out was to prove `Array.clone` makes provably equal copies, then thread a copy through each proof.
+- **Scheduler rule:** the guide says lanes must be balanced, but not that a lane must be a direct parallel call to a no-fork def. We found that by reading the generated C and confirmed it with a control build.
+- **Heap limit:** no limit means a sizing mistake can reboot the machine. This is the most serious operational risk found so far.
+- **Rewriting:** `%e` direction again cost about eight failed attempts.
+- **Small traps:** `+` on a field of a dependent pair fails with "cannot infer", so such fields go through a helper. Base takes names like `Key` and `Word`, and `is` is a keyword. `match xs ys` with a wildcard doesn't reduce when the other side is unknown, so proofs split those cases out.
+- **Good:** a loop with a mode argument and a pair parameter is both gate-passing and faster than the spike's chain of defs. The search-keeps-the-graph proof was generated from the search's own arms and passed first try. Templates gave one file-reading fold for four record types.
+
 ### One state per contractor
 
 The rule went in as a design choice, not a check on every edit. An instance is one state, and existing laws already put every stop in the instance and every crew in its list, so the law follows from them.
@@ -437,11 +486,10 @@ Some injected bugs were caught because a proof script stopped matching the code,
 **Friction**
 
 - **Parallel reads:** an array has one owner, so lanes can't share a read-only graph without `@unsafe`. Copying it is the largest memory cost in the road search.
-- **Scaling:** 4 lanes gained nothing over 2 in road search, while 8 gained 5x. The cause isn't known.
 
 ## Main risks
 
-1. **Road process in Bend:** the road build works for the whole country, but the Bend side is still a spike. It's `@unsafe`, needs a def for every array read, and copies the graph per lane. A version that passes the gate may be slower or use more memory, and Bend's heap can't shrink, so going over a cap kills the process with no warning.
+1. **Bend's unlimited heap:** the road process passes the gate within its cap, but one bad size can fill the machine with no warning. Budget checks and memory caps are the only defense, and each new process needs its own.
 2. **Proof effort:** measured at 3.7 proof lines per line of code, and manageable. The risk now is the verbosity of proofs at web scale, not whether they can be done.
 3. **Scale of road data in Bend's memory model:** lists and strings are expensive, so performance depends on staying in arrays.
 4. **Geocoding quality:** free address data has gaps, particularly in rural areas.
