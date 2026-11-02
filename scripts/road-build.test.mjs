@@ -214,6 +214,25 @@ test("treats motorways and roundabouts as one-way unless told otherwise", () => 
   );
 });
 
+test("leaves out private roads unless cars are let back in", () => {
+  const { edges } = run([
+    nodesBlock(nodes),
+    waysBlock([
+      { tags: { highway: "residential", access: "private" }, refs: [a, b] },
+      { tags: { highway: "residential", motor_vehicle: "no" }, refs: [b, c] },
+      {
+        tags: { highway: "residential", access: "private", motorcar: "yes" },
+        refs: [c, d],
+      },
+      {
+        tags: { highway: "residential", access: "yes", vehicle: "private" },
+        refs: [d, driveway],
+      },
+    ]),
+  ]);
+  assert.equal(edges.length, 1);
+});
+
 test("drops an edge whose end has no node, and counts the gap", () => {
   const { result, edges } = run([
     nodesBlock(nodes.slice(0, 2)),

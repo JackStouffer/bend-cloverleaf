@@ -156,16 +156,26 @@ function parseSpeed(text) {
   return Math.round(speed);
 }
 
-// Returns a way's class, speed and direction, or null if it isn't a road.
+// Who may drive a road, from most to least specific, as in OSRM's car profile.
+// The first of these a way has decides, so motorcar=yes reopens a private road.
+const ACCESS_KEYS = ["motorcar", "motor_vehicle", "vehicle", "access"];
+const CLOSED = new Set(["private", "no"]);
+
+// Returns a way's class, speed and direction, or null if it isn't a road a
+// contractor can drive. Private roads stay out like service roads, and a stop on
+// one snaps to the nearest public road.
 function roadTags(strings, keys, values) {
   let road;
   let speed = 0;
   let oneway;
   let roundabout = false;
+  const access = new Array(ACCESS_KEYS.length);
   for (let i = 0; i < keys.length; i++) {
     const key = strings[keys[i]];
     const value = strings[values[i]];
-    if (key === "highway") road = CLASS_INDEX.get(value);
+    const rank = ACCESS_KEYS.indexOf(key);
+    if (rank >= 0) access[rank] = value;
+    else if (key === "highway") road = CLASS_INDEX.get(value);
     else if (key === "maxspeed") speed = parseSpeed(value);
     else if (key === "oneway") oneway = value;
     else if (key === "junction") {
@@ -173,6 +183,8 @@ function roadTags(strings, keys, values) {
     }
   }
   if (road === undefined) return null;
+  const rule = access.find((value) => value !== undefined);
+  if (rule !== undefined && CLOSED.has(rule)) return null;
   const motorway = road <= 1;
   let direction = 0;
   if (oneway === "-1" || oneway === "reverse") direction = -1;

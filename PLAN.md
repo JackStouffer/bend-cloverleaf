@@ -225,7 +225,7 @@ There are no regions or overlay. A state's graph comes to at most 49MB of adjace
 
 `road matrix` takes stops as coordinates, snaps each to its nearest node through a hash grid of 0.02 degree cells, and writes a matrix of drive times. Service roads stay out of the routing graph. A stop on one snaps to the nearest public road, which slightly understates the last few hundred meters. Road shapes stay in their own file, read only when drawing a route.
 
-Two things in the road records still need checking against the reference router. Roads tagged `access=private` aren't filtered out yet, and default speeds by road class are first guesses.
+Roads closed to cars stay out of the graph, using the most specific of `motorcar`, `motor_vehicle`, `vehicle` and `access` as OSRM's car profile does. `private` and `no` close a road. A stop on one snaps to the nearest public road, like a stop on a service road. Default speeds by road class are still first guesses, to be tuned against the reference router.
 
 At runtime, the road process holds one state at a time. The nightly solve knows all its lookups up front, so it loads each state once, runs its searches, and writes that state's travel-time matrices. The solver reads those instead of touching the graph. Same-day repairs need only a few searches in the contractor's state, and still need a long-running road service in Milestone 6. Lanes are set per state from its size, because each lane copies the graph, and `road` refuses a depth that doesn't fit a 900MB budget.
 
@@ -310,7 +310,7 @@ The Node road build is done for the whole country, one folder per state, and its
 
 **Done when:** the road process serves lookups for its largest state under a hard 1GB cap, and a sample of routes is within an agreed margin of a reference router. The lower-48 road build already completes under its hard 1GB cap.
 **Go/no-go:** if a gate-passing search is too slow or too large for Texas, reduce lanes first, then graph detail.
-**Status:** go. The gate-passing search beats the spike on Texas and fits the cap. Still open: which reference router to use and its margin, the `access=private` filter and default speeds that depend on it, and a first real run of Compose.
+**Status:** go. The gate-passing search beats the spike on Texas and fits the cap. Private roads are filtered out. Still open: which reference router to use and its margin, the default speeds that depend on it, and a first real run of Compose.
 
 ### 3. National solver (L)
 
