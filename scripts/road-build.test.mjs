@@ -192,11 +192,12 @@ test("stores a reversed one-way in travel order", () => {
 
 test("computes meters and time from the road's speed", () => {
   const { edges } = run(map());
-  // 0.002 degrees of latitude is about 222m. 35 mph rounds to 56 km/h.
+  // 0.002 degrees of latitude is about 222m. A residential road is 25 km/h.
+  // 35 mph is 56 km/h, and traffic keeps cars to 80% of that, 45 km/h.
   assert.equal(edges[0][2], 222);
-  assert.equal(edges[0][3], 200);
+  assert.equal(edges[0][3], 320);
   assert.equal(edges[2][2], 222);
-  assert.equal(edges[2][3], 143);
+  assert.equal(edges[2][3], 178);
 });
 
 test("treats motorways and roundabouts as one-way unless told otherwise", () => {

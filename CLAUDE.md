@@ -32,6 +32,7 @@ node scripts/road-build.mjs data/osm/us-latest.osm.pbf data/osm/outlines data/ro
 node scripts/check-road-data.mjs data/road                # check the output against its format
 node --test "scripts/*.test.mjs"                         # test the Node scripts
 node scripts/check-road-matrix.mjs check data/road/texas points.bin matrix.bin 36000  # compare a matrix with a separate implementation
+node scripts/compare-osrm.mjs compare points.bin matrix.bin 36000 http://127.0.0.1:5000  # check drive times against OSRM
 docker compose run --rm road-build                       # fetch and build the road data in Compose, once Docker is here
 ```
 

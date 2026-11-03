@@ -95,7 +95,7 @@ function search({ first, heads, costs }, source, limit, dist) {
     swap(0, keys.length - 1);
     keys.pop();
     nodes.pop();
-    for (let i = 0; ; ) {
+    for (let i = 0; ;) {
       let child = 2 * i + 1;
       if (child >= keys.length) break;
       if (child + 1 < keys.length && keys[child + 1] < keys[child]) child++;
@@ -110,7 +110,7 @@ function search({ first, heads, costs }, source, limit, dist) {
       dist[heads[arc]] = reached;
       keys.push(reached);
       nodes.push(heads[arc]);
-      for (let i = keys.length - 1; i > 0; ) {
+      for (let i = keys.length - 1; i > 0;) {
         const parent = (i - 1) >> 1;
         if (keys[parent] <= keys[i]) break;
         swap(i, parent);

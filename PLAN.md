@@ -102,6 +102,11 @@ Tested on Bend 2.0.39 on this machine (6 cores, 12 threads, 15GB RAM, 926GB free
 | Bend builds Texas's adjacency from `edges.bin` in 1.45s, in two passes. All 49 states loaded and searched under a hard 1GB cap, peaking at 152MB on one lane | The road process needs nothing precomputed but the road records |
 | A heap capacity of 2^20 entries is far above what real searches use: 530 entries at most in Delaware | Capacity is checked on every push and a full heap fails the search, so nothing wraps |
 | A Texas matrix of 1,000 stops took 12.1s on 4 lanes, with every reached cell's path walked and checked, peaking at 600MB. All 1,000,000 cells matched an independent Node implementation | Checking every reported time costs almost nothing, because the 1-hour limit leaves only 8% of cells reachable |
+| Against OSRM v6.0.0's car profile, with our first-guess speeds, our times ran 24% fast and 0.2% of Georgia trips were within 10% | Default speeds and the 80% factor on posted limits now come from OSRM's car profile (BSD-2-Clause, credited in `scripts/OSRM-LICENSE.txt`) |
+| After that, the share of trips within 10% of OSRM was 99.4% in Georgia (11,663 trips), 98.7% in central Texas (29,093) and 97.7% in Delaware (45,037). Ours run a median 2.5-3% faster, because we model no turn or traffic signal delays. Trips under 5 minutes do worst, 62-79% within | Passes the agreed bar: 90% of trips within 10% of OSRM. Turn costs would need a turn-expanded graph |
+| In Delaware, 3 of 300 sample points could be reached but led nowhere, because their only exit was a private road we leave out. That cost 374 trips | Small cut-off pieces of the graph need dropping, as OSRM does, so stops never snap into them |
+| A Georgia outlier ran 14 minutes slow because the only short way in was a 130m one-lane bridge tagged `highway=service` | Leaving service roads out costs the odd detour. Rare enough to accept for now |
+| OSRM needed 10.3GB to preprocess Georgia plus a 50km margin, and 4.9GB for central Texas | A whole Texas couldn't be compared under a safe cap, so the comparison used a central region with points 50km inside it |
 | A bad lane depth was killed by a 2GB cgroup cap within 30s, cloning the graph without limit. Run with no cap, the same command is the likely cause of two reboots of the whole WSL machine | Going over budget can take the machine down, not just the process. Pure budget checks run before any allocation, and every binary runs under a `MemoryMax` cap with `MemorySwapMax=0` |
 | Solving 10,000 jobs as 48 population-weighted states took 1.6s in total on one thread, against 19.3s as one national instance, and the largest state took 0.34s. These were separate runs on synthetic data with straight-line times | One solve per state is about 12x cheaper, and could finish in about 0.34s on 6 or more cores against 5.3s today |
 | Geofabrik's `.pbf` is sorted by type: Delaware has 350 node blocks, then 40 way blocks, then 1 relation block | One pass can't work, because a node's use isn't known until after it's been read |
@@ -225,7 +230,7 @@ There are no regions or overlay. A state's graph comes to at most 49MB of adjace
 
 `road matrix` takes stops as coordinates, snaps each to its nearest node through a hash grid of 0.02 degree cells, and writes a matrix of drive times. Service roads stay out of the routing graph. A stop on one snaps to the nearest public road, which slightly understates the last few hundred meters. Road shapes stay in their own file, read only when drawing a route.
 
-Roads closed to cars stay out of the graph, using the most specific of `motorcar`, `motor_vehicle`, `vehicle` and `access` as OSRM's car profile does. `private` and `no` close a road. A stop on one snaps to the nearest public road, like a stop on a service road. Default speeds by road class are still first guesses, to be tuned against the reference router.
+Roads closed to cars stay out of the graph, using the most specific of `motorcar`, `motor_vehicle`, `vehicle` and `access` as OSRM's car profile does. `private` and `no` close a road. A stop on one snaps to the nearest public road, like a stop on a service road. Default speeds by road class and the 80% factor on posted limits come from OSRM's car profile, and `scripts/compare-osrm.mjs` checks our times against OSRM's.
 
 At runtime, the road process holds one state at a time. The nightly solve knows all its lookups up front, so it loads each state once, runs its searches, and writes that state's travel-time matrices. The solver reads those instead of touching the graph. Same-day repairs need only a few searches in the contractor's state, and still need a long-running road service in Milestone 6. Lanes are set per state from its size, because each lane copies the graph, and `road` refuses a depth that doesn't fit a 900MB budget.
 
@@ -310,7 +315,7 @@ The Node road build is done for the whole country, one folder per state, and its
 
 **Done when:** the road process serves lookups for its largest state under a hard 1GB cap, and a sample of routes is within an agreed margin of a reference router. The lower-48 road build already completes under its hard 1GB cap.
 **Go/no-go:** if a gate-passing search is too slow or too large for Texas, reduce lanes first, then graph detail.
-**Status:** go. The gate-passing search beats the spike on Texas and fits the cap. Private roads are filtered out. Still open: which reference router to use and its margin, the default speeds that depend on it, and a first real run of Compose.
+**Status:** go. The gate-passing search beats the spike on Texas and fits the cap. Private roads are filtered out, and drive times pass the reference check: OSRM v6.0.0 is the reference, and the agreed bar is 90% of trips within 10%. Still open: dropping small cut-off pieces of the graph, and a first real run of Compose.
 
 ### 3. National solver (L)
 

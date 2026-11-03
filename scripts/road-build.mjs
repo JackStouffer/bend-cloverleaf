@@ -29,23 +29,29 @@ import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
 
 // Service roads stay out of the routing graph. Speeds are km/h, used when a
-// way has no usable maxspeed tag.
+// way has no usable maxspeed tag. They're OSRM's car profile defaults, as is
+// SPEED_REDUCTION, so that drive times can be checked against OSRM. OSRM is
+// Copyright (c) 2017, Project OSRM contributors, under the BSD license in
+// OSRM-LICENSE.txt. OSRM has no speed for highway=road, so it gets residential's.
 export const ROAD_CLASSES = [
-  ["motorway", 105],
-  ["motorway_link", 70],
-  ["trunk", 90],
-  ["trunk_link", 60],
-  ["primary", 80],
-  ["primary_link", 55],
-  ["secondary", 70],
-  ["secondary_link", 50],
-  ["tertiary", 60],
-  ["tertiary_link", 45],
-  ["unclassified", 50],
-  ["residential", 40],
-  ["living_street", 15],
-  ["road", 40],
+  ["motorway", 90],
+  ["motorway_link", 45],
+  ["trunk", 85],
+  ["trunk_link", 40],
+  ["primary", 65],
+  ["primary_link", 30],
+  ["secondary", 55],
+  ["secondary_link", 25],
+  ["tertiary", 40],
+  ["tertiary_link", 20],
+  ["unclassified", 25],
+  ["residential", 25],
+  ["living_street", 10],
+  ["road", 25],
 ];
+
+// Traffic keeps cars under a posted limit, so a tagged speed counts for this much.
+const SPEED_REDUCTION = 0.8;
 const CLASS_INDEX = new Map(ROAD_CLASSES.map(([name], i) => [name, i]));
 
 const ID_BITS = 24;
@@ -167,6 +173,7 @@ const CLOSED = new Set(["private", "no"]);
 function roadTags(strings, keys, values) {
   let road;
   let speed = 0;
+  let advisory = 0;
   let oneway;
   let roundabout = false;
   const access = new Array(ACCESS_KEYS.length);
@@ -177,6 +184,7 @@ function roadTags(strings, keys, values) {
     if (rank >= 0) access[rank] = value;
     else if (key === "highway") road = CLASS_INDEX.get(value);
     else if (key === "maxspeed") speed = parseSpeed(value);
+    else if (key === "maxspeed:advisory") advisory = parseSpeed(value);
     else if (key === "oneway") oneway = value;
     else if (key === "junction") {
       roundabout = value === "roundabout" || value === "circular";
@@ -191,7 +199,14 @@ function roadTags(strings, keys, values) {
   else if (oneway === "yes" || oneway === "true" || oneway === "1") {
     direction = 1;
   } else if (oneway !== "no" && (motorway || roundabout)) direction = 1;
-  return { road, speed: speed || ROAD_CLASSES[road][1], direction };
+  const tagged = advisory || speed;
+  return {
+    road,
+    speed: tagged
+      ? Math.max(1, Math.round(tagged * SPEED_REDUCTION))
+      : ROAD_CLASSES[road][1],
+    direction,
+  };
 }
 
 function readWay(data, strings, start, end, keys, values, refs, onWay) {
