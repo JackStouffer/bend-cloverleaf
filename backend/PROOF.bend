@@ -66,32 +66,36 @@ def Laws.slot_order_is_strict(s):
 
 def Laws.route_crew_is_listed(inst, plan, n, r, ev, on):
   PR.crew_found(T.Instance.crews(inst), T.Route.crew(r),
-    L.and_l(P.Crews.has(T.Instance.crews(inst), T.Route.crew(r)), R.Route.ok(T.Instance.cap(inst), r), PR.fine_valid(inst, plan, n, r, ev, on)))
+    L.and_l(P.Crews.has(T.Instance.crews(inst), T.Route.crew(r)), R.Route.ok(T.Instance.times(inst), T.Instance.cap(inst), r), PR.fine_valid(inst, plan, n, r, ev, on)))
 
 def Laws.route_stays_in_state(inst, plan, n, r, k, s, ev, on, at):
   PR.stays_in_state(inst, plan, n, r, k, s, ev, on, at)
 
 def Laws.locked_stops_come_first(inst, plan, n, r, ev, on):
-  PR.open_tail(T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on))
+  PR.open_tail(T.Instance.times(inst), T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on))
 
 def Laws.overtime_is_recorded(inst, plan, n, r, ev, on):
-  Equal.cong(T.Audit, Bool, a => T.Audit.overtime(a), T.Route.audit(r), PR.Truth(r),
-    PR.audit_true(T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on)))
+  +times = T.Instance.times(inst)
+  Equal.cong(T.Audit, Bool, a => T.Audit.overtime(a), T.Route.audit(r), PR.Truth(times, r),
+    PR.audit_true(T.Instance.times(inst), T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on)))
 
 def Laws.off_day_is_recorded(inst, plan, n, r, ev, on):
-  Equal.cong(T.Audit, Bool, a => T.Audit.off_day(a), T.Route.audit(r), PR.Truth(r),
-    PR.audit_true(T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on)))
+  +times = T.Instance.times(inst)
+  Equal.cong(T.Audit, Bool, a => T.Audit.off_day(a), T.Route.audit(r), PR.Truth(times, r),
+    PR.audit_true(T.Instance.times(inst), T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on)))
 
 def Laws.late_stop_is_recorded(inst, plan, n, k, r, s, ev, on, stop, late):
-  %Equal.sym(T.Audit, T.Route.audit(r), PR.Truth(r), PR.audit_true(T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on))) : {R.Nats.has(T.Audit.late(_), T.Stop.id(s)) == True{} : Bool}
+  +times = T.Instance.times(inst)
+  %Equal.sym(T.Audit, T.Route.audit(r), PR.Truth(times, r), PR.audit_true(T.Instance.times(inst), T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on))) : {R.Nats.has(T.Audit.late(_), T.Stop.id(s)) == True{} : Bool}
   PR.late_listed(T.Route.stops(r), k, s, T.Route.day(r), stop, late)
 
 def Laws.outside_stop_is_flagged(inst, plan, n, k, r, s, ev, on, stop, out):
-  %Equal.sym(T.Audit, T.Route.audit(r), PR.Truth(r), PR.audit_true(T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on))) : {R.Nats.has(T.Audit.outside(_), T.Stop.id(s)) == True{} : Bool}
+  +times = T.Instance.times(inst)
+  %Equal.sym(T.Audit, T.Route.audit(r), PR.Truth(times, r), PR.audit_true(T.Instance.times(inst), T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on))) : {R.Nats.has(T.Audit.outside(_), T.Stop.id(s)) == True{} : Bool}
   PR.outside_listed(T.Route.stops(r), k, s, T.Contractor.zips(T.Route.crew(r)), stop, out)
 
 def Laws.outside_work_within_cap(inst, plan, n, r, ev, on):
-  PR.extra_true(T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on))
+  PR.extra_true(T.Instance.times(inst), T.Instance.cap(inst), r, PR.ok_valid(inst, plan, n, r, ev, on))
 
 def Laws.heal_keeps_plan_valid(st, ev, e):
   PE.good_change(st, ev, e)
@@ -120,8 +124,8 @@ def Laws.repeat_request_changes_nothing(inst, plan, job, known):
 def Laws.request_from_another_state_changes_nothing(inst, plan, job, other):
   PE.request_other(J.has_id(T.Instance.jobs(inst), T.Appraisal.id(job)), inst, plan, job, other)
 
-def Laws.closed_route_takes_no_new_work(cap, plan, i, c, d, at, closed):
-  PE.closed_backfill(cap, plan, i, c, d, at, closed)
+def Laws.closed_route_takes_no_new_work(times, cap, plan, i, c, d, at, closed):
+  PE.closed_backfill(times, cap, plan, i, c, d, at, closed)
 
 def Laws.trivial_plan_is_valid(inst, e):
   PS.trivial_valid(inst, e)
@@ -132,20 +136,20 @@ def Laws.published_plan_is_valid(inst, plan, e):
 def Laws.solved_plan_is_valid(tune, inst, first, last, e):
   PS.publish_valid(inst, S.improve(S.Tuning.passes(tune), inst, S.plan(tune, inst, first, last)), e)
 
-def Laws.candidate_route_is_open(cap, job, outside, r, c, e):
-  PS.fits_open(r, job, PS.one_fits(cap, job, outside, r, R.Nats.has(T.Contractor.zips(T.Route.crew(r)), T.Appraisal.zip(job)), c, e))
+def Laws.candidate_route_is_open(times, cap, job, outside, r, c, e):
+  PS.fits_open(times, r, job, PS.one_fits(times, cap, job, outside, r, R.Nats.has(T.Contractor.zips(T.Route.crew(r)), T.Appraisal.zip(job)), c, e))
 
-def Laws.candidate_meets_deadline(cap, job, outside, r, c, e):
-  PS.fits_due(r, job, PS.one_fits(cap, job, outside, r, R.Nats.has(T.Contractor.zips(T.Route.crew(r)), T.Appraisal.zip(job)), c, e))
+def Laws.candidate_meets_deadline(times, cap, job, outside, r, c, e):
+  PS.fits_due(times, r, job, PS.one_fits(times, cap, job, outside, r, R.Nats.has(T.Contractor.zips(T.Route.crew(r)), T.Appraisal.zip(job)), c, e))
 
-def Laws.candidate_within_hours(cap, job, outside, r, c, e):
-  PS.fits_hours(r, job, PS.one_fits(cap, job, outside, r, R.Nats.has(T.Contractor.zips(T.Route.crew(r)), T.Appraisal.zip(job)), c, e))
+def Laws.candidate_within_hours(times, cap, job, outside, r, c, e):
+  PS.fits_hours(times, r, job, PS.one_fits(times, cap, job, outside, r, R.Nats.has(T.Contractor.zips(T.Route.crew(r)), T.Appraisal.zip(job)), c, e))
 
-def Laws.inside_search_stays_in_zip(cap, job, r, c, e):
-  PS.in_zip(R.Nats.has(T.Contractor.zips(T.Route.crew(r)), T.Appraisal.zip(job)), r, job, c, e)
+def Laws.inside_search_stays_in_zip(times, cap, job, r, c, e):
+  PS.in_zip(times, R.Nats.has(T.Contractor.zips(T.Route.crew(r)), T.Appraisal.zip(job)), r, job, c, e)
 
-def Laws.only_urgent_work_leaves_zip(d, cap, last, w, job, later):
-  PS.rescue_stays(Nat.is_lt(T.Appraisal.due(job), last), d, cap, w, job, later)
+def Laws.only_urgent_work_leaves_zip(d, times, cap, last, w, job, later):
+  PS.rescue_stays(Nat.is_lt(T.Appraisal.due(job), last), d, times, cap, w, job, later)
 
 def Laws.optimizer_never_worsens_score(fuel, inst, plan):
   PS.improve_score(fuel, inst, plan)
@@ -153,8 +157,8 @@ def Laws.optimizer_never_worsens_score(fuel, inst, plan):
 def Laws.optimizer_keeps_plan_valid(fuel, inst, plan, ev):
   PS.improve_valid(fuel, inst, plan, ev)
 
-def Laws.parallel_search_matches_sequential(t, d, cap, job, outside):
-  PS.tree_seq(t, d, cap, job, outside)
+def Laws.parallel_search_matches_sequential(t, d, times, cap, job, outside):
+  PS.tree_seq(t, d, times, cap, job, outside)
 
 def Laws.parallel_check_matches_sequential(inst, plan):
   PS.check_valid(inst, plan)

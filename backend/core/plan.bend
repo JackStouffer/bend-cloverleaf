@@ -77,15 +77,15 @@ def Plan.placed(+plan: T.Plan) -> List<&2, T.Appraisal>:
   List.append(&2, T.Appraisal, Routes.jobs(T.Plan.routes(plan)),
     List.append(&2, T.Appraisal, T.Plan.backlog(plan), Exceptions.jobs(T.Plan.exceptions(plan))))
 
-def Route.fine(+crews: List<&2, T.Contractor>, +cap: Nat, +r: T.Route) -> Bool:
-  Bool.and(Crews.has(crews, T.Route.crew(r)), R.Route.ok(cap, r))
+def Route.fine(+crews: List<&2, T.Contractor>, +times: T.Times, +cap: Nat, +r: T.Route) -> Bool:
+  Bool.and(Crews.has(crews, T.Route.crew(r)), R.Route.ok(times, cap, r))
 
-def Routes.ok(routes: List<&2, T.Route>, +crews: List<&2, T.Contractor>, +cap: Nat) -> Bool:
+def Routes.ok(routes: List<&2, T.Route>, +crews: List<&2, T.Contractor>, +times: T.Times, +cap: Nat) -> Bool:
   match routes:
     case Nil{}:
       True{}
     case +r <> t:
-      Bool.and(Route.fine(crews, cap, r), Routes.ok(t, crews, cap))
+      Bool.and(Route.fine(crews, times, cap, r), Routes.ok(t, crews, times, cap))
 
 def Routes.locked(routes: List<&2, T.Route>) -> List<&2, List<&2, T.Stop>>:
   match routes:
@@ -108,7 +108,7 @@ def Plan.valid(+inst: T.Instance, +plan: T.Plan) -> Bool:
   Bool.and(Instance.ok(inst),
     Bool.and(Plan.partition_ok(inst, plan),
       Bool.and(Slots.sorted(Routes.slots(T.Plan.routes(plan))),
-        Routes.ok(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.cap(inst)))))
+        Routes.ok(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.times(inst), T.Instance.cap(inst)))))
 
 # Everything waits in the backlog. Always available, so a planner that goes
 # wrong can fall back to it.
@@ -120,18 +120,18 @@ def Plan.trivial(+inst: T.Instance) -> T.Plan:
 
 # Splits the routes in half level by level. Routes cost about the same to check,
 # so halves by count are balanced.
-def Routes.ok_par(+fuel: Nat, +size: Nat, +routes: List<&2, T.Route>, +crews: List<&2, T.Contractor>, +cap: Nat) -> Bool:
+def Routes.ok_par(+fuel: Nat, +size: Nat, +routes: List<&2, T.Route>, +crews: List<&2, T.Contractor>, +times: T.Times, +cap: Nat) -> Bool:
   match fuel:
     case 0n:
-      Routes.ok(routes, crews, cap)
+      Routes.ok(routes, crews, times, cap)
     case 1n+f:
       +half = Nat.div(size, 2n)
-      a b = Routes.ok_par(f, half, List.take(&2, T.Route, routes, half), crews, cap) Routes.ok_par(f, Nat.sub(size, half), List.drop(&2, T.Route, routes, half), crews, cap)
+      a b = Routes.ok_par(f, half, List.take(&2, T.Route, routes, half), crews, times, cap) Routes.ok_par(f, Nat.sub(size, half), List.drop(&2, T.Route, routes, half), crews, times, cap)
       Bool.and(a, b)
 
 # The same answer as Plan.valid, on every core.
 def Plan.check(+inst: T.Instance, +plan: T.Plan) -> Bool:
   +routes = T.Plan.routes(plan)
   +size = List.length(&2, T.Route, routes)
-  a b = Plan.partition_ok(inst, plan) Routes.ok_par(5n, size, routes, T.Instance.crews(inst), T.Instance.cap(inst))
+  a b = Plan.partition_ok(inst, plan) Routes.ok_par(5n, size, routes, T.Instance.crews(inst), T.Instance.times(inst), T.Instance.cap(inst))
   Bool.and(Instance.ok(inst), Bool.and(a, Bool.and(Slots.sorted(Routes.slots(routes)), b)))

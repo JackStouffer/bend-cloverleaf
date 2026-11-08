@@ -422,49 +422,52 @@ def audit_refl(a):
               L.and_i(T.Nats.is_eq(l, l), T.Nats.is_eq(u, u), L.nats_refl(l), L.nats_refl(u))))))
 
 law ok_seal:
+  for +times: T.Times
   for +cap: Nat
   for +crew: T.Contractor
   for +day: Nat
   for +stops: ST()
   for +closed: Bool
   for +e1: {R.Stops.all_open(R.Stops.tail(stops)) == True{} : Bool}
-  for +e2: {Nat.is_le(R.Route.extra(crew, stops), cap) == True{} : Bool}
-  {R.Route.ok(cap, R.Route.seal(crew, day, stops, closed)) == True{} : Bool}
+  for +e2: {Nat.is_le(R.Route.extra(times, crew, stops), cap) == True{} : Bool}
+  {R.Route.ok(times, cap, R.Route.seal(times, crew, day, stops, closed)) == True{} : Bool}
 
-def ok_seal(cap, crew, day, stops, closed, e1, e2):
-  +a = R.Audit.of(crew, day, stops)
+def ok_seal(times, cap, crew, day, stops, closed, e1, e2):
+  +a = R.Audit.of(times, crew, day, stops)
   L.and_i(R.Stops.all_open(R.Stops.tail(stops)), Bool.and(T.Audit.is_eq(a, a), Nat.is_le(T.Audit.extra(a), cap)), e1,
     L.and_i(T.Audit.is_eq(a, a), Nat.is_le(T.Audit.extra(a), cap), audit_refl(a), e2))
 
 law remake_t:
+  for +times: T.Times
   for +cap: Nat
   for +crew: T.Contractor
   for +day: Nat
   for +closed: Bool
   for +h: ST()
   for +t: ST()
-  for +e: {Nat.is_le(R.Route.extra(crew, R.Stops.append(h, t)), cap) == True{} : Bool}
-  {R.Route.remake(cap, crew, day, closed, h, t) == R.Step{R.Route.seal(crew, day, R.Stops.append(h, t), closed), Nil{}} : R.Step}
+  for +e: {Nat.is_le(R.Route.extra(times, crew, R.Stops.append(h, t)), cap) == True{} : Bool}
+  {R.Route.remake(times, cap, crew, day, closed, h, t) == R.Step{R.Route.seal(times, crew, day, R.Stops.append(h, t), closed), Nil{}} : R.Step}
 
-def remake_t(cap, crew, day, closed, h, t, e):
-  %Equal.sym(Bool, Nat.is_le(R.Route.extra(crew, R.Stops.append(h, t)), cap), True{}, e) : {R.Route.remake.if(_, crew, day, closed, h, t) == R.Step{R.Route.seal(crew, day, R.Stops.append(h, t), closed), Nil{}} : R.Step}
+def remake_t(times, cap, crew, day, closed, h, t, e):
+  %Equal.sym(Bool, Nat.is_le(R.Route.extra(times, crew, R.Stops.append(h, t)), cap), True{}, e) : {R.Route.remake.if(times, _, crew, day, closed, h, t) == R.Step{R.Route.seal(times, crew, day, R.Stops.append(h, t), closed), Nil{}} : R.Step}
   {==}
 
 def Trim(+crew: T.Contractor, +h: ST(), +t: ST()) -> ST():
   R.Stops.append(h, R.Stops.keep(t, R.Crew.inside(crew)))
 
 law remake_f:
+  for +times: T.Times
   for +cap: Nat
   for +crew: T.Contractor
   for +day: Nat
   for +closed: Bool
   for +h: ST()
   for +t: ST()
-  for +e: {Nat.is_le(R.Route.extra(crew, R.Stops.append(h, t)), cap) == False{} : Bool}
-  {R.Route.remake(cap, crew, day, closed, h, t) == R.Step{R.Route.seal(crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, R.Crew.inside(crew))} : R.Step}
+  for +e: {Nat.is_le(R.Route.extra(times, crew, R.Stops.append(h, t)), cap) == False{} : Bool}
+  {R.Route.remake(times, cap, crew, day, closed, h, t) == R.Step{R.Route.seal(times, crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, R.Crew.inside(crew))} : R.Step}
 
-def remake_f(cap, crew, day, closed, h, t, e):
-  %Equal.sym(Bool, Nat.is_le(R.Route.extra(crew, R.Stops.append(h, t)), cap), False{}, e) : {R.Route.remake.if(_, crew, day, closed, h, t) == R.Step{R.Route.seal(crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, R.Crew.inside(crew))} : R.Step}
+def remake_f(times, cap, crew, day, closed, h, t, e):
+  %Equal.sym(Bool, Nat.is_le(R.Route.extra(times, crew, R.Stops.append(h, t)), cap), False{}, e) : {R.Route.remake.if(times, _, crew, day, closed, h, t) == R.Step{R.Route.seal(times, crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, R.Crew.inside(crew))} : R.Step}
   {==}
 
 # After shedding there's nothing left to charge the cap.
@@ -486,21 +489,22 @@ def trim_again(crew, h, t, eh, et):
   {==}
 
 law extra_trim:
+  for +times: T.Times
   for +crew: T.Contractor
   for +h: ST()
   for +t: ST()
   for +eh: {R.Stops.all_locked(h) == True{} : Bool}
   for +et: {R.Stops.all_open(t) == True{} : Bool}
-  {R.Route.extra(crew, Trim(crew, h, t)) == 0n : Nat}
+  {R.Route.extra(times, crew, Trim(crew, h, t)) == 0n : Nat}
 
-def extra_trim(crew, h, t, eh, et):
+def extra_trim(times, crew, h, t, eh, et):
   +s2 = Trim(crew, h, t)
   +z = R.Crew.inside(crew)
   +inner = R.Stops.append(R.Stops.head(s2), R.Stops.keep(R.Stops.tail(s2), z))
-  Equal.trans(Nat, Nat.sub(R.Route.loop_drive(crew, s2), R.Route.loop_drive(crew, inner)),
-    Nat.sub(R.Route.loop_drive(crew, s2), R.Route.loop_drive(crew, s2)), 0n,
-    Equal.cong(ST(), Nat, l => Nat.sub(R.Route.loop_drive(crew, s2), R.Route.loop_drive(crew, l)), inner, s2, trim_again(crew, h, t, eh, et)),
-    L.sub_self(R.Route.loop_drive(crew, s2)))
+  Equal.trans(Nat, Nat.sub(R.Route.loop_drive(times, crew, s2), R.Route.loop_drive(times, crew, inner)),
+    Nat.sub(R.Route.loop_drive(times, crew, s2), R.Route.loop_drive(times, crew, s2)), 0n,
+    Equal.cong(ST(), Nat, l => Nat.sub(R.Route.loop_drive(times, crew, s2), R.Route.loop_drive(times, crew, l)), inner, s2, trim_again(crew, h, t, eh, et)),
+    L.sub_self(R.Route.loop_drive(times, crew, s2)))
 
 law le_of_zero:
   for -a: Nat
@@ -526,6 +530,7 @@ def open_tail_full(h, t, eh, et):
 # Every route out of remake is valid, whatever the head and tail hold, as long as
 # the head is locked and the tail is open.
 law ok_remake:
+  for +times: T.Times
   for +cap: Nat
   for +crew: T.Contractor
   for +day: Nat
@@ -534,43 +539,44 @@ law ok_remake:
   for +t: ST()
   for +eh: {R.Stops.all_locked(h) == True{} : Bool}
   for +et: {R.Stops.all_open(t) == True{} : Bool}
-  {R.Route.ok(cap, R.Step.route(R.Route.remake(cap, crew, day, closed, h, t))) == True{} : Bool}
+  {R.Route.ok(times, cap, R.Step.route(R.Route.remake(times, cap, crew, day, closed, h, t))) == True{} : Bool}
 
-def ok_remake(cap, crew, day, closed, h, t, eh, et):
+def ok_remake(times, cap, crew, day, closed, h, t, eh, et):
   +full = R.Stops.append(h, t)
-  +m = R.Route.remake(cap, crew, day, closed, h, t)
+  +m = R.Route.remake(times, cap, crew, day, closed, h, t)
   +z = R.Crew.inside(crew)
-  L.cases(Nat.is_le(R.Route.extra(crew, full), cap), {R.Route.ok(cap, R.Step.route(m)) == True{} : Bool},
+  L.cases(Nat.is_le(R.Route.extra(times, crew, full), cap), {R.Route.ok(times, cap, R.Step.route(m)) == True{} : Bool},
     +e =>
-      %Equal.sym(R.Step, m, R.Step{R.Route.seal(crew, day, full, closed), Nil{}}, remake_t(cap, crew, day, closed, h, t, e)) : {R.Route.ok(cap, R.Step.route(_)) == True{} : Bool}
-      ok_seal(cap, crew, day, full, closed, open_tail_full(h, t, eh, et), e),
+      %Equal.sym(R.Step, m, R.Step{R.Route.seal(times, crew, day, full, closed), Nil{}}, remake_t(times, cap, crew, day, closed, h, t, e)) : {R.Route.ok(times, cap, R.Step.route(_)) == True{} : Bool}
+      ok_seal(times, cap, crew, day, full, closed, open_tail_full(h, t, eh, et), e),
     +e =>
-      %Equal.sym(R.Step, m, R.Step{R.Route.seal(crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, z)}, remake_f(cap, crew, day, closed, h, t, e)) : {R.Route.ok(cap, R.Step.route(_)) == True{} : Bool}
-      ok_seal(cap, crew, day, Trim(crew, h, t), closed,
+      %Equal.sym(R.Step, m, R.Step{R.Route.seal(times, crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, z)}, remake_f(times, cap, crew, day, closed, h, t, e)) : {R.Route.ok(times, cap, R.Step.route(_)) == True{} : Bool}
+      ok_seal(times, cap, crew, day, Trim(crew, h, t), closed,
         open_tail_full(h, R.Stops.keep(t, z), eh, open_keep(t, z, et)),
-        le_of_zero(R.Route.extra(crew, Trim(crew, h, t)), cap, extra_trim(crew, h, t, eh, et))))
+        le_of_zero(R.Route.extra(times, crew, Trim(crew, h, t)), cap, extra_trim(times, crew, h, t, eh, et))))
 
 # Nothing goes missing in a remake: what's on the route plus what was shed.
 law jc_remake:
   for +a: T.Appraisal
+  for +times: T.Times
   for +cap: Nat
   for +crew: T.Contractor
   for +day: Nat
   for +closed: Bool
   for +h: ST()
   for +t: ST()
-  {Nat.add(JC(a, T.Route.stops(R.Step.route(R.Route.remake(cap, crew, day, closed, h, t)))), JC(a, R.Step.shed(R.Route.remake(cap, crew, day, closed, h, t)))) == Nat.add(JC(a, h), JC(a, t)) : Nat}
+  {Nat.add(JC(a, T.Route.stops(R.Step.route(R.Route.remake(times, cap, crew, day, closed, h, t)))), JC(a, R.Step.shed(R.Route.remake(times, cap, crew, day, closed, h, t)))) == Nat.add(JC(a, h), JC(a, t)) : Nat}
 
-def jc_remake(a, cap, crew, day, closed, h, t):
+def jc_remake(a, times, cap, crew, day, closed, h, t):
   +full = R.Stops.append(h, t)
-  +m = R.Route.remake(cap, crew, day, closed, h, t)
+  +m = R.Route.remake(times, cap, crew, day, closed, h, t)
   +z = R.Crew.inside(crew)
-  L.cases(Nat.is_le(R.Route.extra(crew, full), cap), {Nat.add(JC(a, T.Route.stops(R.Step.route(m))), JC(a, R.Step.shed(m))) == Nat.add(JC(a, h), JC(a, t)) : Nat},
+  L.cases(Nat.is_le(R.Route.extra(times, crew, full), cap), {Nat.add(JC(a, T.Route.stops(R.Step.route(m))), JC(a, R.Step.shed(m))) == Nat.add(JC(a, h), JC(a, t)) : Nat},
     +e =>
-      %Equal.sym(R.Step, m, R.Step{R.Route.seal(crew, day, full, closed), Nil{}}, remake_t(cap, crew, day, closed, h, t, e)) : {Nat.add(JC(a, T.Route.stops(R.Step.route(_))), JC(a, R.Step.shed(_))) == Nat.add(JC(a, h), JC(a, t)) : Nat}
+      %Equal.sym(R.Step, m, R.Step{R.Route.seal(times, crew, day, full, closed), Nil{}}, remake_t(times, cap, crew, day, closed, h, t, e)) : {Nat.add(JC(a, T.Route.stops(R.Step.route(_))), JC(a, R.Step.shed(_))) == Nat.add(JC(a, h), JC(a, t)) : Nat}
       Equal.trans(Nat, Nat.add(JC(a, full), 0n), JC(a, full), Nat.add(JC(a, h), JC(a, t)), L.add_zero(JC(a, full)), jc_append(a, h, t)),
     +e =>
-      %Equal.sym(R.Step, m, R.Step{R.Route.seal(crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, z)}, remake_f(cap, crew, day, closed, h, t, e)) : {Nat.add(JC(a, T.Route.stops(R.Step.route(_))), JC(a, R.Step.shed(_))) == Nat.add(JC(a, h), JC(a, t)) : Nat}
+      %Equal.sym(R.Step, m, R.Step{R.Route.seal(times, crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, z)}, remake_f(times, cap, crew, day, closed, h, t, e)) : {Nat.add(JC(a, T.Route.stops(R.Step.route(_))), JC(a, R.Step.shed(_))) == Nat.add(JC(a, h), JC(a, t)) : Nat}
       +k = R.Stops.keep(t, z)
       +c = R.Stops.cut(t, z)
       Equal.trans(Nat, Nat.add(JC(a, R.Stops.append(h, k)), JC(a, c)), Nat.add(Nat.add(JC(a, h), JC(a, k)), JC(a, c)),
@@ -583,45 +589,47 @@ def jc_remake(a, cap, crew, day, closed, h, t):
 
 # The crew and day don't change in a remake.
 law crew_remake:
+  for +times: T.Times
   for +cap: Nat
   for +crew: T.Contractor
   for +day: Nat
   for +closed: Bool
   for +h: ST()
   for +t: ST()
-  {T.Route.crew(R.Step.route(R.Route.remake(cap, crew, day, closed, h, t))) == crew : T.Contractor}
+  {T.Route.crew(R.Step.route(R.Route.remake(times, cap, crew, day, closed, h, t))) == crew : T.Contractor}
 
-def crew_remake(cap, crew, day, closed, h, t):
+def crew_remake(times, cap, crew, day, closed, h, t):
   +full = R.Stops.append(h, t)
-  +m = R.Route.remake(cap, crew, day, closed, h, t)
+  +m = R.Route.remake(times, cap, crew, day, closed, h, t)
   +z = R.Crew.inside(crew)
-  L.cases(Nat.is_le(R.Route.extra(crew, full), cap), {T.Route.crew(R.Step.route(m)) == crew : T.Contractor},
+  L.cases(Nat.is_le(R.Route.extra(times, crew, full), cap), {T.Route.crew(R.Step.route(m)) == crew : T.Contractor},
     +e =>
-      %Equal.sym(R.Step, m, R.Step{R.Route.seal(crew, day, full, closed), Nil{}}, remake_t(cap, crew, day, closed, h, t, e)) : {T.Route.crew(R.Step.route(_)) == crew : T.Contractor}
+      %Equal.sym(R.Step, m, R.Step{R.Route.seal(times, crew, day, full, closed), Nil{}}, remake_t(times, cap, crew, day, closed, h, t, e)) : {T.Route.crew(R.Step.route(_)) == crew : T.Contractor}
       {==},
     +e =>
-      %Equal.sym(R.Step, m, R.Step{R.Route.seal(crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, z)}, remake_f(cap, crew, day, closed, h, t, e)) : {T.Route.crew(R.Step.route(_)) == crew : T.Contractor}
+      %Equal.sym(R.Step, m, R.Step{R.Route.seal(times, crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, z)}, remake_f(times, cap, crew, day, closed, h, t, e)) : {T.Route.crew(R.Step.route(_)) == crew : T.Contractor}
       {==})
 
 law day_remake:
+  for +times: T.Times
   for +cap: Nat
   for +crew: T.Contractor
   for +day: Nat
   for +closed: Bool
   for +h: ST()
   for +t: ST()
-  {T.Route.day(R.Step.route(R.Route.remake(cap, crew, day, closed, h, t))) == day : Nat}
+  {T.Route.day(R.Step.route(R.Route.remake(times, cap, crew, day, closed, h, t))) == day : Nat}
 
-def day_remake(cap, crew, day, closed, h, t):
+def day_remake(times, cap, crew, day, closed, h, t):
   +full = R.Stops.append(h, t)
-  +m = R.Route.remake(cap, crew, day, closed, h, t)
+  +m = R.Route.remake(times, cap, crew, day, closed, h, t)
   +z = R.Crew.inside(crew)
-  L.cases(Nat.is_le(R.Route.extra(crew, full), cap), {T.Route.day(R.Step.route(m)) == day : Nat},
+  L.cases(Nat.is_le(R.Route.extra(times, crew, full), cap), {T.Route.day(R.Step.route(m)) == day : Nat},
     +e =>
-      %Equal.sym(R.Step, m, R.Step{R.Route.seal(crew, day, full, closed), Nil{}}, remake_t(cap, crew, day, closed, h, t, e)) : {T.Route.day(R.Step.route(_)) == day : Nat}
+      %Equal.sym(R.Step, m, R.Step{R.Route.seal(times, crew, day, full, closed), Nil{}}, remake_t(times, cap, crew, day, closed, h, t, e)) : {T.Route.day(R.Step.route(_)) == day : Nat}
       {==},
     +e =>
-      %Equal.sym(R.Step, m, R.Step{R.Route.seal(crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, z)}, remake_f(cap, crew, day, closed, h, t, e)) : {T.Route.day(R.Step.route(_)) == day : Nat}
+      %Equal.sym(R.Step, m, R.Step{R.Route.seal(times, crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, z)}, remake_f(times, cap, crew, day, closed, h, t, e)) : {T.Route.day(R.Step.route(_)) == day : Nat}
       {==})
 
 # Locked stops
@@ -678,6 +686,7 @@ def locked_app(h, t, eh, et):
       {==}
 
 law locked_remake:
+  for +times: T.Times
   for +cap: Nat
   for +crew: T.Contractor
   for +day: Nat
@@ -686,18 +695,18 @@ law locked_remake:
   for +t: ST()
   for +eh: {R.Stops.all_locked(h) == True{} : Bool}
   for +et: {R.Stops.all_open(t) == True{} : Bool}
-  {R.Stops.locked(T.Route.stops(R.Step.route(R.Route.remake(cap, crew, day, closed, h, t)))) == h : ST()}
+  {R.Stops.locked(T.Route.stops(R.Step.route(R.Route.remake(times, cap, crew, day, closed, h, t)))) == h : ST()}
 
-def locked_remake(cap, crew, day, closed, h, t, eh, et):
+def locked_remake(times, cap, crew, day, closed, h, t, eh, et):
   +full = R.Stops.append(h, t)
-  +m = R.Route.remake(cap, crew, day, closed, h, t)
+  +m = R.Route.remake(times, cap, crew, day, closed, h, t)
   +z = R.Crew.inside(crew)
-  L.cases(Nat.is_le(R.Route.extra(crew, full), cap), {R.Stops.locked(T.Route.stops(R.Step.route(m))) == h : ST()},
+  L.cases(Nat.is_le(R.Route.extra(times, crew, full), cap), {R.Stops.locked(T.Route.stops(R.Step.route(m))) == h : ST()},
     +e =>
-      %Equal.sym(R.Step, m, R.Step{R.Route.seal(crew, day, full, closed), Nil{}}, remake_t(cap, crew, day, closed, h, t, e)) : {R.Stops.locked(T.Route.stops(R.Step.route(_))) == h : ST()}
+      %Equal.sym(R.Step, m, R.Step{R.Route.seal(times, crew, day, full, closed), Nil{}}, remake_t(times, cap, crew, day, closed, h, t, e)) : {R.Stops.locked(T.Route.stops(R.Step.route(_))) == h : ST()}
       locked_app(h, t, eh, et),
     +e =>
-      %Equal.sym(R.Step, m, R.Step{R.Route.seal(crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, z)}, remake_f(cap, crew, day, closed, h, t, e)) : {R.Stops.locked(T.Route.stops(R.Step.route(_))) == h : ST()}
+      %Equal.sym(R.Step, m, R.Step{R.Route.seal(times, crew, day, Trim(crew, h, t), closed), R.Stops.cut(t, z)}, remake_f(times, cap, crew, day, closed, h, t, e)) : {R.Stops.locked(T.Route.stops(R.Step.route(_))) == h : ST()}
       locked_app(h, R.Stops.keep(t, z), eh, open_keep(t, z, et)))
 
 # A route's locked stops are its head once the tail is open.

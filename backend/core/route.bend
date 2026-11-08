@@ -2,6 +2,7 @@ import Base
 import ./types.bend as T
 import ./lifecycle.bend as Life
 import ./geo.bend as Geo
+import ./times.bend as Tm
 
 # One contractor's day. A route is a locked head (stops underway or done, in the
 # order worked) then an open tail the planner may rearrange.
@@ -130,13 +131,13 @@ def Stops.jobs(stops: List<&2, T.Stop>) -> List<&2, T.Appraisal>:
       T.Stop.job(s) <> Stops.jobs(r)
 
 # Drive minutes from `from` through the stops and back to home.
-def Stops.drive(stops: List<&2, T.Stop>, +from: T.Point, +home: T.Point) -> Nat:
+def Stops.drive(+times: T.Times, stops: List<&2, T.Stop>, +from: T.Point, +home: T.Point) -> Nat:
   match stops:
     case Nil{}:
-      Geo.minutes(from, home)
+      Tm.minutes(times, from, home)
     case s <> r:
       +site = Stop.site(s)
-      Nat.add(Geo.minutes(from, site), Stops.drive(r, site, home))
+      Nat.add(Tm.minutes(times, from, site), Stops.drive(times, r, site, home))
 
 def Stops.service(stops: List<&2, T.Stop>) -> Nat:
   match stops:
@@ -169,28 +170,28 @@ def Stops.outside(stops: List<&2, T.Stop>, +zips: List<&2, Nat>) -> List<&2, Nat
 def Crew.inside(c: T.Contractor) -> Test:
   InZips{T.Contractor.zips(c)}
 
-def Route.loop_drive(+crew: T.Contractor, stops: List<&2, T.Stop>) -> Nat:
+def Route.loop_drive(+times: T.Times, +crew: T.Contractor, stops: List<&2, T.Stop>) -> Nat:
   +home = T.Contractor.home(crew)
-  Stops.drive(stops, home, home)
+  Stops.drive(times, stops, home, home)
 
 # Drive time owed to unlocked out-of-zip stops. Locked ones are sunk, so healing
 # can always bring a route back under the cap by shedding what's left.
-def Route.extra(+crew: T.Contractor, +stops: List<&2, T.Stop>) -> Nat:
+def Route.extra(+times: T.Times, +crew: T.Contractor, +stops: List<&2, T.Stop>) -> Nat:
   +inside = Stops.keep(Stops.tail(stops), Crew.inside(crew))
-  Nat.sub(Route.loop_drive(crew, stops), Route.loop_drive(crew, Stops.append(Stops.head(stops), inside)))
+  Nat.sub(Route.loop_drive(times, crew, stops), Route.loop_drive(times, crew, Stops.append(Stops.head(stops), inside)))
 
 # Drive time plus time on site.
-def Route.worked(+crew: T.Contractor, +stops: List<&2, T.Stop>) -> Nat:
-  Nat.add(Route.loop_drive(crew, stops), Stops.service(stops))
+def Route.worked(+times: T.Times, +crew: T.Contractor, +stops: List<&2, T.Stop>) -> Nat:
+  Nat.add(Route.loop_drive(times, crew, stops), Stops.service(stops))
 
-def Audit.of(+crew: T.Contractor, +day: Nat, +stops: List<&2, T.Stop>) -> T.Audit:
-  +minutes = Route.worked(crew, stops)
-  T.Audit{minutes, Route.extra(crew, stops), Nat.is_gt(minutes, T.Contractor.max_minutes(crew)),
+def Audit.of(+times: T.Times, +crew: T.Contractor, +day: Nat, +stops: List<&2, T.Stop>) -> T.Audit:
+  +minutes = Route.worked(times, crew, stops)
+  T.Audit{minutes, Route.extra(times, crew, stops), Nat.is_gt(minutes, T.Contractor.max_minutes(crew)),
     Bool.not(Nats.has(T.Contractor.days(crew), day)), Stops.late(stops, day),
     Stops.outside(stops, T.Contractor.zips(crew))}
 
-def Route.seal(+crew: T.Contractor, +day: Nat, +stops: List<&2, T.Stop>, closed: Bool) -> T.Route:
-  T.Route{crew, day, stops, closed, Audit.of(crew, day, stops)}
+def Route.seal(+times: T.Times, +crew: T.Contractor, +day: Nat, +stops: List<&2, T.Stop>, closed: Bool) -> T.Route:
+  T.Route{crew, day, stops, closed, Audit.of(times, crew, day, stops)}
 
 type Step is Data:
   Step{route: T.Route, shed: List<&2, T.Stop>}
@@ -210,24 +211,24 @@ def Step.add(out: List<&2, T.Stop>, s: Step) -> Step:
     case Step{r, x}:
       Step{r, Stops.append(out, x)}
 
-def Route.remake.if(c: Bool, +crew: T.Contractor, +day: Nat, closed: Bool, +h: List<&2, T.Stop>, +t: List<&2, T.Stop>) -> Step:
+def Route.remake.if(+times: T.Times, c: Bool, +crew: T.Contractor, +day: Nat, closed: Bool, +h: List<&2, T.Stop>, +t: List<&2, T.Stop>) -> Step:
   match c:
     case True{}:
-      Step{Route.seal(crew, day, Stops.append(h, t), closed), Nil{}}
+      Step{Route.seal(times, crew, day, Stops.append(h, t), closed), Nil{}}
     case False{}:
-      Step{Route.seal(crew, day, Stops.append(h, Stops.keep(t, Crew.inside(crew))), closed),
+      Step{Route.seal(times, crew, day, Stops.append(h, Stops.keep(t, Crew.inside(crew))), closed),
         Stops.cut(t, Crew.inside(crew))}
 
 # Rebuilds a route from a head and a tail, shedding unlocked out-of-zip stops if
 # they cost more than the cap. Every route that leaves here is valid.
-def Route.remake(+cap: Nat, +crew: T.Contractor, +day: Nat, closed: Bool, +h: List<&2, T.Stop>, +t: List<&2, T.Stop>) -> Step:
-  Route.remake.if(Nat.is_le(Route.extra(crew, Stops.append(h, t)), cap), crew, day, closed, h, t)
+def Route.remake(+times: T.Times, +cap: Nat, +crew: T.Contractor, +day: Nat, closed: Bool, +h: List<&2, T.Stop>, +t: List<&2, T.Stop>) -> Step:
+  Route.remake.if(times, Nat.is_le(Route.extra(times, crew, Stops.append(h, t)), cap), crew, day, closed, h, t)
 
-def Route.ok(+cap: Nat, r: T.Route) -> Bool:
+def Route.ok(+times: T.Times, +cap: Nat, r: T.Route) -> Bool:
   match r:
     case T.Route{c, d, +s, k, +a}:
       Bool.and(Stops.all_open(Stops.tail(s)),
-        Bool.and(T.Audit.is_eq(a, Audit.of(c, d, s)), Nat.is_le(T.Audit.extra(a), cap)))
+        Bool.and(T.Audit.is_eq(a, Audit.of(times, c, d, s)), Nat.is_le(T.Audit.extra(a), cap)))
 
 def Route.path.go(stops: List<&2, T.Stop>, +home: T.Point) -> List<&2, T.Point>:
   match stops:

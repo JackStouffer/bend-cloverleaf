@@ -7,6 +7,7 @@ import ../core/plan.bend as P
 import ../core/heal.bend as H
 import ../core/solve.bend as S
 import ../core/geo.bend as Geo
+import ../core/times.bend as Tm
 import ../solver/synth.bend as Syn
 import ../road/graph.bend as RG
 import ../road/search.bend as RS
@@ -50,17 +51,17 @@ def crew(+id: Nat, +zips: List<&2, Nat>, +max: Nat) -> T.Contractor:
 
 def inst() -> T.Instance:
   T.Instance{[crew(1n, [100n, 101n], 480n), crew(2n, [102n], 480n)],
-    [job(1n, 100n, 100n, 10n), job(2n, 200n, 100n, 10n), job(3n, 300n, 101n, 11n), job(4n, 400n, 102n, 10n)], 60n, ny()}
+    [job(1n, 100n, 100n, 10n), job(2n, 200n, 100n, 10n), job(3n, 300n, 101n, 11n), job(4n, 400n, 102n, 10n)], 60n, ny(), Tm.none()}
 
 # Georgia's FIPS code, for anything that belongs to another state's instance.
 def foreign_job() -> T.Appraisal:
   T.Appraisal{9n, near_nyc(100n), 100n, 10n, 20n, 13n}
 
 def foreign_crew() -> T.Instance:
-  T.Instance{[T.Contractor{1n, nyc(), [100n], 480n, [10n], 13n}], [job(1n, 100n, 100n, 10n)], 60n, ny()}
+  T.Instance{[T.Contractor{1n, nyc(), [100n], 480n, [10n], 13n}], [job(1n, 100n, 100n, 10n)], 60n, ny(), Tm.none()}
 
 def foreign_jobs() -> T.Instance:
-  T.Instance{[crew(1n, [100n], 480n)], [foreign_job()], 60n, ny()}
+  T.Instance{[crew(1n, [100n], 480n)], [foreign_job()], 60n, ny(), Tm.none()}
 
 def tune() -> S.Tuning:
   S.Tuning.standard()
@@ -123,19 +124,35 @@ def far_job() -> T.Appraisal:
 # A crew limited to a short day, to see the planner stop at its hours.
 def short_inst() -> T.Instance:
   T.Instance{[crew(1n, [100n], 60n)], [job(1n, 100n, 100n, 20n), job(2n, 200n, 100n, 20n), job(3n, 300n, 100n, 20n), job(4n, 400n, 100n, 20n),
-    job(5n, 500n, 100n, 20n), job(6n, 600n, 100n, 20n), job(7n, 700n, 100n, 20n), job(8n, 800n, 100n, 20n)], 60n, ny()}
+    job(5n, 500n, 100n, 20n), job(6n, 600n, 100n, 20n), job(7n, 700n, 100n, 20n), job(8n, 800n, 100n, 20n)], 60n, ny(), Tm.none()}
 
 # One day with room for about two stops, and the job due first listed last.
 def tight_inst() -> T.Instance:
-  T.Instance{[crew(1n, [100n], 60n)], [job(1n, 100n, 100n, 30n), job(2n, 200n, 100n, 30n), job(3n, 300n, 100n, 30n), job(4n, 400n, 100n, 10n)], 60n, ny()}
+  T.Instance{[crew(1n, [100n], 60n)], [job(1n, 100n, 100n, 30n), job(2n, 200n, 100n, 30n), job(3n, 300n, 100n, 30n), job(4n, 400n, 100n, 10n)], 60n, ny(), Tm.none()}
 
 # Work nobody covers, due inside the horizon: it should cross a zip and be flagged.
 def outside_inst() -> T.Instance:
-  T.Instance{[crew(1n, [100n], 480n)], [job(1n, 100n, 555n, 10n)], 60n, ny()}
+  T.Instance{[crew(1n, [100n], 480n)], [job(1n, 100n, 555n, 10n)], 60n, ny(), Tm.none()}
 
 # Same, but too far for the cap.
 def too_far_inst() -> T.Instance:
-  T.Instance{[crew(1n, [100n], 2000n)], [T.Appraisal{1n, la(), 555n, 10n, 20n, ny()}], 60n, ny()}
+  T.Instance{[crew(1n, [100n], 2000n)], [T.Appraisal{1n, la(), 555n, 10n, 20n, ny()}], 60n, ny(), Tm.none()}
+
+# One job a short way off, with a road table that says the drive takes each way
+# minutes. Due past the horizon, so if it can't fit it waits.
+def road_inst(+each: Nat) -> T.Instance:
+  T.Instance{[crew(1n, [100n], 480n)], [job(1n, 100n, 100n, 20n)], 60n, ny(),
+    Tm.of(61n, [Tm.Entry{nyc(), near_nyc(100n), each}, Tm.Entry{near_nyc(100n), nyc(), each}])}
+
+def road_plan(+each: Nat) -> T.Plan:
+  S.solve(tune(), road_inst(each), 10n, 12n)
+
+def worked(routes: List<&2, T.Route>) -> Nat:
+  match routes:
+    case Nil{}:
+      0n
+    case +r <> t:
+      Nat.add(T.Audit.minutes(T.Route.audit(r)), worked(t))
 
 def total_outside(routes: List<&2, T.Route>) -> Nat:
   match routes:
@@ -509,6 +526,65 @@ def road_checks() -> List<&2, Check>:
    Check{"a turn graph loads from its records", road.same(turns.time(), [13])},
    Check{"a turn to a node past the last is counted as bad", U32.is_eq(turns.bad(), 1)}]
 
+# Road times
+# ----------
+
+def times.table() -> T.Times:
+  Tm.of(61n, [Tm.Entry{nyc(), near_nyc(1000n), 37n}, Tm.Entry{near_nyc(1000n), near_nyc(2000n), 9n}, Tm.Entry{nyc(), near_nyc(2000n), 5n}])
+
+def times.get(+a: T.Point, +b: T.Point) -> Nat:
+  Tm.minutes(times.table(), a, b)
+
+# Row i of a bigger table: from near_nyc(7i) to near_nyc(7j) takes i + j minutes.
+def times.many.row(n: Nat, +i: Nat, acc: List<&2, Tm.Entry>) -> List<&2, Tm.Entry>:
+  match n:
+    case 0n:
+      acc
+    case 1n+p:
+      +j = p
+      times.many.row(j, i, Tm.Entry{near_nyc(Nat.mul(i, 7n)), near_nyc(Nat.mul(j, 7n)), Nat.add(i, j)} <> acc)
+
+def times.many.rows(n: Nat, +size: Nat, acc: List<&2, Tm.Entry>) -> List<&2, Tm.Entry>:
+  match n:
+    case 0n:
+      acc
+    case 1n+p:
+      +i = p
+      times.many.rows(i, size, times.many.row(size, i, acc))
+
+def times.many() -> T.Times:
+  Tm.of(0n, times.many.rows(40n, 40n, Nil{}))
+
+def times.sum.row(n: Nat, +t: T.Times, +i: Nat) -> Nat:
+  match n:
+    case 0n:
+      0n
+    case 1n+p:
+      +j = p
+      Nat.add(Tm.minutes(t, near_nyc(Nat.mul(i, 7n)), near_nyc(Nat.mul(j, 7n))), times.sum.row(j, t, i))
+
+def times.sum(n: Nat, +t: T.Times, +size: Nat) -> Nat:
+  match n:
+    case 0n:
+      0n
+    case 1n+p:
+      +i = p
+      Nat.add(times.sum.row(size, t, i), times.sum(i, t, size))
+
+def times_checks() -> List<&2, Check>:
+  [Check{"a pair in the table takes the table's time", Nat.is_eq(times.get(nyc(), near_nyc(1000n)), 37n)},
+   Check{"every pair in a row is found", Nat.is_eq(times.get(nyc(), near_nyc(2000n)), 5n)},
+   Check{"a table time can beat the straight line", Nat.is_lt(times.get(nyc(), near_nyc(2000n)), Geo.minutes(nyc(), near_nyc(2000n)))},
+   Check{"the table is one-way", Nat.is_eq(times.get(near_nyc(1000n), nyc()), 61n)},
+   Check{"a missing pair is never under the table's limit", Nat.is_eq(times.get(near_nyc(2000n), near_nyc(1000n)), 61n)},
+   Check{"a far missing pair takes the straight line", Nat.is_eq(times.get(nyc(), la()), Geo.minutes(nyc(), la()))},
+   Check{"the same point is zero minutes", Nat.is_eq(times.get(nyc(), nyc()), 0n)},
+   Check{"no table means straight-line times", Nat.is_eq(Tm.minutes(Tm.none(), nyc(), near_nyc(9000n)), Geo.minutes(nyc(), near_nyc(9000n)))},
+   Check{"a route's minutes come from the road times", Nat.is_eq(worked(T.Plan.routes(road_plan(200n))), 420n)},
+   Check{"a plan on road times is valid", P.Plan.valid(road_inst(200n), road_plan(200n))},
+   Check{"work too far by road waits", Nat.is_eq(count_routes(T.Plan.routes(road_plan(250n))), 0n)},
+   Check{"a 1,600-pair table finds every pair", Nat.is_eq(times.sum(40n, times.many(), 40n), 60840n)}]
+
 def show(c: Check) -> String:
   match c:
     case Check{n, True{}}:
@@ -540,5 +616,5 @@ def finish(n: Nat) -> IO(Unit):
       IO.die(Unit, 1, Nat.show(n) ++ " scenarios failed")
 
 def main() -> IO(Unit):
-  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), road_checks())))
+  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), road_checks()))))
   IO.bind(Unit, Unit, print_all(all), u => finish(failed(all)))

@@ -21,8 +21,8 @@ def Route.at(+r: T.Route, +c: Nat, +d: Nat) -> Bool:
   Bool.and(Nat.is_eq(T.Contractor.id(T.Route.crew(r)), c), Nat.is_eq(T.Route.day(r), d))
 
 # Rebuilds r, adding `out` to what the rebuild sheds.
-def Route.reshape(+cap: Nat, +r: T.Route, closed: Bool, +h: List<&2, T.Stop>, +t: List<&2, T.Stop>, out: List<&2, T.Stop>) -> R.Step:
-  R.Step.add(out, R.Route.remake(cap, T.Route.crew(r), T.Route.day(r), closed, h, t))
+def Route.reshape(+times: T.Times, +cap: Nat, +r: T.Route, closed: Bool, +h: List<&2, T.Stop>, +t: List<&2, T.Stop>, out: List<&2, T.Stop>) -> R.Step:
+  R.Step.add(out, R.Route.remake(times, cap, T.Route.crew(r), T.Route.day(r), closed, h, t))
 
 def Stop.start(s: T.Stop) -> T.Stop:
   match s:
@@ -61,62 +61,62 @@ def Route.t(+r: T.Route) -> List<&2, T.Stop>:
   R.Stops.tail(T.Route.stops(r))
 
 # Each edit is guarded by a Bool, so a route it doesn't touch costs no rebuild.
-def Pull.if(c: Bool, +cap: Nat, +r: T.Route, +i: Nat) -> R.Step:
+def Pull.if(c: Bool, +times: T.Times, +cap: Nat, +r: T.Route, +i: Nat) -> R.Step:
   match c:
     case True{}:
-      Route.reshape(cap, r, T.Route.closed(r), Route.h(r), R.Stops.cut(Route.t(r), R.HasId{i}), R.Stops.keep(Route.t(r), R.HasId{i}))
+      Route.reshape(times, cap, r, T.Route.closed(r), Route.h(r), R.Stops.cut(Route.t(r), R.HasId{i}), R.Stops.keep(Route.t(r), R.HasId{i}))
     case False{}:
       R.Step{r, Nil{}}
 
-def Clear.if(c: Bool, +cap: Nat, +r: T.Route) -> R.Step:
+def Clear.if(c: Bool, +times: T.Times, +cap: Nat, +r: T.Route) -> R.Step:
   match c:
     case True{}:
-      Route.reshape(cap, r, True{}, Route.h(r), Nil{}, Route.t(r))
+      Route.reshape(times, cap, r, True{}, Route.h(r), Nil{}, Route.t(r))
     case False{}:
       R.Step{r, Nil{}}
 
-def Reorder.if(c: Bool, +cap: Nat, +r: T.Route, +n: List<&2, T.Stop>) -> R.Step:
+def Reorder.if(c: Bool, +times: T.Times, +cap: Nat, +r: T.Route, +n: List<&2, T.Stop>) -> R.Step:
   match c:
     case True{}:
-      Route.reshape(cap, r, T.Route.closed(r), Route.h(r), n, Nil{})
+      Route.reshape(times, cap, r, T.Route.closed(r), Route.h(r), n, Nil{})
     case False{}:
       R.Step{r, Nil{}}
 
-def Begin.if(c: Bool, +cap: Nat, +r: T.Route, +i: Nat) -> R.Step:
+def Begin.if(c: Bool, +times: T.Times, +cap: Nat, +r: T.Route, +i: Nat) -> R.Step:
   match c:
     case True{}:
-      Route.reshape(cap, r, T.Route.closed(r), R.Stops.append(Route.h(r), Stops.start(R.Stops.keep(Route.t(r), R.HasId{i}))), R.Stops.cut(Route.t(r), R.HasId{i}), Nil{})
+      Route.reshape(times, cap, r, T.Route.closed(r), R.Stops.append(Route.h(r), Stops.start(R.Stops.keep(Route.t(r), R.HasId{i}))), R.Stops.cut(Route.t(r), R.HasId{i}), Nil{})
     case False{}:
       R.Step{r, Nil{}}
 
-def Finish.if(c: Bool, +cap: Nat, +r: T.Route, +i: Nat) -> R.Step:
+def Finish.if(c: Bool, +times: T.Times, +cap: Nat, +r: T.Route, +i: Nat) -> R.Step:
   match c:
     case True{}:
-      Route.reshape(cap, r, T.Route.closed(r), Stops.finish(Route.h(r), i), Route.t(r), Nil{})
+      Route.reshape(times, cap, r, T.Route.closed(r), Stops.finish(Route.h(r), i), Route.t(r), Nil{})
     case False{}:
       R.Step{r, Nil{}}
 
-def Abandon.if(c: Bool, +cap: Nat, +r: T.Route, +i: Nat) -> R.Step:
+def Abandon.if(c: Bool, +times: T.Times, +cap: Nat, +r: T.Route, +i: Nat) -> R.Step:
   match c:
     case True{}:
-      Route.reshape(cap, r, T.Route.closed(r), R.Stops.cut(Route.h(r), R.IsUnderway{i}), Route.t(r), R.Stops.keep(Route.h(r), R.IsUnderway{i}))
+      Route.reshape(times, cap, r, T.Route.closed(r), R.Stops.cut(Route.h(r), R.IsUnderway{i}), Route.t(r), R.Stops.keep(Route.h(r), R.IsUnderway{i}))
     case False{}:
       R.Step{r, Nil{}}
 
-def Route.apply(+cap: Nat, e: Edit, +r: T.Route) -> R.Step:
+def Route.apply(+times: T.Times, +cap: Nat, e: Edit, +r: T.Route) -> R.Step:
   match e:
     case Pull{+i}:
-      Pull.if(R.Stops.any(Route.t(r), R.HasId{i}), cap, r, i)
+      Pull.if(R.Stops.any(Route.t(r), R.HasId{i}), times, cap, r, i)
     case Clear{+c, +d}:
-      Clear.if(Route.at(r, c, d), cap, r)
+      Clear.if(Route.at(r, c, d), times, cap, r)
     case Reorder{+c, +d, +n}:
-      Reorder.if(Bool.and(Route.at(r, c, d), Stops.same_bag(n, Route.t(r))), cap, r, n)
+      Reorder.if(Bool.and(Route.at(r, c, d), Stops.same_bag(n, Route.t(r))), times, cap, r, n)
     case Begin{+i}:
-      Begin.if(R.Stops.any(Route.t(r), R.HasId{i}), cap, r, i)
+      Begin.if(R.Stops.any(Route.t(r), R.HasId{i}), times, cap, r, i)
     case Finish{+i}:
-      Finish.if(R.Stops.any(Route.h(r), R.IsUnderway{i}), cap, r, i)
+      Finish.if(R.Stops.any(Route.h(r), R.IsUnderway{i}), times, cap, r, i)
     case Abandon{+i}:
-      Abandon.if(R.Stops.any(Route.h(r), R.IsUnderway{i}), cap, r, i)
+      Abandon.if(R.Stops.any(Route.h(r), R.IsUnderway{i}), times, cap, r, i)
 
 type Edited is Data:
   Edited{routes: List<&2, T.Route>, shed: List<&2, T.Stop>}
@@ -136,18 +136,18 @@ def Edited.cons(s: R.Step, e: Edited) -> Edited:
     case R.Step{r, x} Edited{rs, xs}:
       Edited{r <> rs, R.Stops.append(x, xs)}
 
-def Routes.apply(routes: List<&2, T.Route>, +cap: Nat, +e: Edit) -> Edited:
+def Routes.apply(routes: List<&2, T.Route>, +times: T.Times, +cap: Nat, +e: Edit) -> Edited:
   match routes:
     case Nil{}:
       Edited{Nil{}, Nil{}}
     case r <> t:
-      Edited.cons(Route.apply(cap, e, r), Routes.apply(t, cap, e))
+      Edited.cons(Route.apply(times, cap, e, r), Routes.apply(t, times, cap, e))
 
 def Plan.with(routes: List<&2, T.Route>, shed: List<&2, T.Stop>, backlog: List<&2, T.Appraisal>, ex: List<&2, T.Exception>) -> T.Plan:
   T.Plan{routes, List.append(&2, T.Appraisal, R.Stops.jobs(shed), backlog), ex}
 
-def Plan.edit(+cap: Nat, +e: Edit, +plan: T.Plan) -> T.Plan:
-  +done = Routes.apply(T.Plan.routes(plan), cap, e)
+def Plan.edit(+times: T.Times, +cap: Nat, +e: Edit, +plan: T.Plan) -> T.Plan:
+  +done = Routes.apply(T.Plan.routes(plan), times, cap, e)
   Plan.with(Edited.routes(done), Edited.shed(done), T.Plan.backlog(plan), T.Plan.exceptions(plan))
 
 # Whether a stop on the plan is locked, which is what refuses a cancellation.
@@ -182,24 +182,24 @@ def Stops.insert_at(xs: List<&2, T.Stop>, at: Nat, s: T.Stop) -> List<&2, T.Stop
     case h <> t 1n+p:
       h <> Stops.insert_at(t, p, s)
 
-def Route.put(+cap: Nat, +r: T.Route, +job: T.Appraisal, at: Nat) -> R.Step:
+def Route.put(+times: T.Times, +cap: Nat, +r: T.Route, +job: T.Appraisal, at: Nat) -> R.Step:
   +stops = T.Route.stops(r)
-  Route.reshape(cap, r, T.Route.closed(r), R.Stops.head(stops),
+  Route.reshape(times, cap, r, T.Route.closed(r), R.Stops.head(stops),
     Stops.insert_at(R.Stops.tail(stops), at, T.Stop{job, T.Open{}}), Nil{})
 
-def Routes.put.if(m: Bool, +r: T.Route, +t: List<&2, T.Route>, +cap: Nat, +job: T.Appraisal, +at: Nat, rest: Edited) -> Edited:
+def Routes.put.if(m: Bool, +r: T.Route, +t: List<&2, T.Route>, +times: T.Times, +cap: Nat, +job: T.Appraisal, +at: Nat, rest: Edited) -> Edited:
   match m:
     case True{}:
-      Edited.cons(Route.put(cap, r, job, at), Edited{t, Nil{}})
+      Edited.cons(Route.put(times, cap, r, job, at), Edited{t, Nil{}})
     case False{}:
       Edited.cons(R.Step{r, Nil{}}, rest)
 
-def Routes.put(routes: List<&2, T.Route>, +cap: Nat, +c: Nat, +d: Nat, +job: T.Appraisal, +at: Nat) -> Edited:
+def Routes.put(routes: List<&2, T.Route>, +times: T.Times, +cap: Nat, +c: Nat, +d: Nat, +job: T.Appraisal, +at: Nat) -> Edited:
   match routes:
     case Nil{}:
       Edited{Nil{}, Nil{}}
     case +r <> +t:
-      Routes.put.if(Route.at(r, c, d), r, t, cap, job, at, Routes.put(t, cap, c, d, job, at))
+      Routes.put.if(Route.at(r, c, d), r, t, times, cap, job, at, Routes.put(t, times, cap, c, d, job, at))
 
 def Routes.open_at.if(m: Bool, closed: Bool, rest: Bool) -> Bool:
   match m:
@@ -243,10 +243,10 @@ def State.plan(s: State) -> T.Plan:
       p
 
 def Instance.without(+inst: T.Instance, +i: Nat) -> T.Instance:
-  T.Instance{T.Instance.crews(inst), J.without(T.Instance.jobs(inst), i), T.Instance.cap(inst), T.Instance.state(inst)}
+  T.Instance{T.Instance.crews(inst), J.without(T.Instance.jobs(inst), i), T.Instance.cap(inst), T.Instance.state(inst), T.Instance.times(inst)}
 
 def Instance.with(+inst: T.Instance, +job: T.Appraisal) -> T.Instance:
-  T.Instance{T.Instance.crews(inst), J.insert(T.Instance.jobs(inst), job), T.Instance.cap(inst), T.Instance.state(inst)}
+  T.Instance{T.Instance.crews(inst), J.insert(T.Instance.jobs(inst), job), T.Instance.cap(inst), T.Instance.state(inst), T.Instance.times(inst)}
 
 def Plan.forget(+plan: T.Plan, +i: Nat) -> T.Plan:
   T.Plan{T.Plan.routes(plan), J.without(T.Plan.backlog(plan), i), Exceptions.without(T.Plan.exceptions(plan), i)}
@@ -256,7 +256,7 @@ def cancel.if(locked: Bool, +inst: T.Instance, +plan: T.Plan, +i: Nat) -> State:
     case True{}:
       State{inst, plan}
     case False{}:
-      State{Instance.without(inst, i), Plan.forget(Plan.edit(T.Instance.cap(inst), Pull{i}, plan), i)}
+      State{Instance.without(inst, i), Plan.forget(Plan.edit(T.Instance.times(inst), T.Instance.cap(inst), Pull{i}, plan), i)}
 
 # Refused once work has started: a locked stop can't leave its route.
 def cancel(+inst: T.Instance, +plan: T.Plan, +i: Nat) -> State:
@@ -281,31 +281,31 @@ def request.if(known: Bool, +inst: T.Instance, +plan: T.Plan, +job: T.Appraisal)
 def request(+inst: T.Instance, +plan: T.Plan, +job: T.Appraisal) -> State:
   request.if(J.has_id(T.Instance.jobs(inst), T.Appraisal.id(job)), inst, plan, job)
 
-def backfill.put(+cap: Nat, +plan: T.Plan, rest: List<&2, T.Appraisal>, +job: T.Appraisal, +c: Nat, +d: Nat, +at: Nat) -> T.Plan:
-  +done = Routes.put(T.Plan.routes(plan), cap, c, d, job, at)
+def backfill.put(+times: T.Times, +cap: Nat, +plan: T.Plan, rest: List<&2, T.Appraisal>, +job: T.Appraisal, +c: Nat, +d: Nat, +at: Nat) -> T.Plan:
+  +done = Routes.put(T.Plan.routes(plan), times, cap, c, d, job, at)
   Plan.with(Edited.routes(done), Edited.shed(done), rest, T.Plan.exceptions(plan))
 
-def backfill.check(ok: Bool, +cap: Nat, +plan: T.Plan, rest: List<&2, T.Appraisal>, +job: T.Appraisal, +c: Nat, +d: Nat, +at: Nat) -> T.Plan:
+def backfill.check(ok: Bool, +times: T.Times, +cap: Nat, +plan: T.Plan, rest: List<&2, T.Appraisal>, +job: T.Appraisal, +c: Nat, +d: Nat, +at: Nat) -> T.Plan:
   match ok:
     case True{}:
-      backfill.put(cap, plan, rest, job, c, d, at)
+      backfill.put(times, cap, plan, rest, job, c, d, at)
     case False{}:
       plan
 
-def backfill.go(+cap: Nat, +plan: T.Plan, found: Maybe<&2, T.Appraisal>, rest: List<&2, T.Appraisal>, +c: Nat, +d: Nat, +at: Nat) -> T.Plan:
+def backfill.go(+times: T.Times, +cap: Nat, +plan: T.Plan, found: Maybe<&2, T.Appraisal>, rest: List<&2, T.Appraisal>, +c: Nat, +d: Nat, +at: Nat) -> T.Plan:
   match found:
     case None{}:
       plan
     case Some{+job}:
-      backfill.check(Routes.open_at(T.Plan.routes(plan), c, d), cap, plan, rest, job, c, d, at)
+      backfill.check(Routes.open_at(T.Plan.routes(plan), c, d), times, cap, plan, rest, job, c, d, at)
 
 # Moves one appraisal from the backlog onto an open route.
-def backfill(+cap: Nat, +plan: T.Plan, +i: Nat, +c: Nat, +d: Nat, +at: Nat) -> T.Plan:
+def backfill(+times: T.Times, +cap: Nat, +plan: T.Plan, +i: Nat, +c: Nat, +d: Nat, +at: Nat) -> T.Plan:
   +taken = J.take(T.Plan.backlog(plan), i)
-  backfill.go(cap, plan, J.Taken.found(taken), J.Taken.rest(taken), c, d, at)
+  backfill.go(times, cap, plan, J.Taken.found(taken), J.Taken.rest(taken), c, d, at)
 
 def State.edit(+st: State, +e: Edit) -> State:
-  State{State.inst(st), Plan.edit(T.Instance.cap(State.inst(st)), e, State.plan(st))}
+  State{State.inst(st), Plan.edit(T.Instance.times(State.inst(st)), T.Instance.cap(State.inst(st)), e, State.plan(st))}
 
 def Heal.apply(+st: State, ev: Change) -> State:
   match ev:
@@ -320,7 +320,7 @@ def Heal.apply(+st: State, ev: Change) -> State:
     case Release{i}:
       State.edit(st, Pull{i})
     case Backfill{i, c, d, at}:
-      State{State.inst(st), backfill(T.Instance.cap(State.inst(st)), State.plan(st), i, c, d, at)}
+      State{State.inst(st), backfill(T.Instance.times(State.inst(st)), T.Instance.cap(State.inst(st)), State.plan(st), i, c, d, at)}
 
 def Heal.run(evs: List<&2, Change>, +st: State) -> State:
   match evs:

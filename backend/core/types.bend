@@ -46,11 +46,27 @@ type Exception is Data:
 type Plan is Data:
   Plan{routes: List<&2, Route>, backlog: List<&2, Appraisal>, exceptions: List<&2, Exception>}
 
+# Drive minutes between points, as search trees keyed by Point. core/times.bend
+# builds and reads them; they live here so that an Instance can carry its table.
+type Row is Data:
+  RTip{}
+  RBin{key: Nat, minutes: Nat, l: Row, r: Row}
+
+type Rows is Data:
+  STip{}
+  SBin{key: Nat, row: Row, l: Rows, r: Rows}
+
+# depth bounds every walk down a tree. It is stored here rather than written as a
+# literal, because a literal fuel inside a def the laws reach can hang the checker.
+type Times is Data:
+  Times{floor: Nat, depth: Nat, rows: Rows}
+
 # One instance is one state: contractors never work across a state line, so the
 # national solve is one independent instance per state. crews and jobs are kept
-# sorted by id, with each id once. cap is the out-of-zip drive-time limit in minutes.
+# sorted by id, with each id once. cap is the out-of-zip drive-time limit in minutes,
+# and times holds the state's road times.
 type Instance is Data:
-  Instance{crews: List<&2, Contractor>, jobs: List<&2, Appraisal>, cap: Nat, state: Nat}
+  Instance{crews: List<&2, Contractor>, jobs: List<&2, Appraisal>, cap: Nat, state: Nat, times: Times}
 
 # Accessors
 # ---------
@@ -215,23 +231,28 @@ def Plan.exceptions(p: Plan) -> List<&2, Exception>:
 
 def Instance.state(i: Instance) -> Nat:
   match i:
-    case Instance{c, j, k, s}:
+    case Instance{c, j, k, s, m}:
       s
 
 def Instance.crews(i: Instance) -> List<&2, Contractor>:
   match i:
-    case Instance{c, j, k, s}:
+    case Instance{c, j, k, s, m}:
       c
 
 def Instance.jobs(i: Instance) -> List<&2, Appraisal>:
   match i:
-    case Instance{c, j, k, s}:
+    case Instance{c, j, k, s, m}:
       j
 
 def Instance.cap(i: Instance) -> Nat:
   match i:
-    case Instance{c, j, k, s}:
+    case Instance{c, j, k, s, m}:
       k
+
+def Instance.times(i: Instance) -> Times:
+  match i:
+    case Instance{c, j, k, s, m}:
+      m
 
 # Equality
 # --------

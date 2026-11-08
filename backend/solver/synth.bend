@@ -1,5 +1,6 @@
 import Base
 import ../core/types.bend as T
+import ../core/times.bend as Tm
 
 # Synthetic instances for the benchmark: a small fixed-seed generator, so runs
 # compare like with like. The real generator comes with the national solver.
@@ -96,4 +97,4 @@ def jobs(n: Nat, +id: Nat, +x: Nat, +first: Nat, +span: Nat) -> List<&2, T.Appra
       T.Appraisal{id, site, area(site, m), Nat.add(first, Nat.mod(next(y), span)), 20n, 0n} <> jobs(p, 1n+id, y, first, span)
 
 def instance(+crew_count: Nat, +job_count: Nat, +first: Nat, +span: Nat) -> T.Instance:
-  T.Instance{crews(crew_count, 1n, 7n, first, span), jobs(job_count, 1n, 12345n, first, span), 60n, 0n}
+  T.Instance{crews(crew_count, 1n, 7n, first, span), jobs(job_count, 1n, 12345n, first, span), 60n, 0n, Tm.none()}

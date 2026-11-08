@@ -125,15 +125,16 @@ def zero_cut(z, xs, i, ez):
 law zero_pull:
   for +z: T.Appraisal
   for +c: Bool
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
   for +i: Nat
   for +ez: {Nat.is_eq(T.Appraisal.id(z), i) == True{} : Bool}
   for +eh: {R.Stops.any(H.Route.h(r), R.HasId{i}) == False{} : Bool}
   for +ec: {R.Stops.any(H.Route.t(r), R.HasId{i}) == c : Bool}
-  {JC(z, T.Route.stops(R.Step.route(H.Pull.if(c, cap, r, i)))) == 0n : Nat}
+  {JC(z, T.Route.stops(R.Step.route(H.Pull.if(c, times, cap, r, i)))) == 0n : Nat}
 
-def zero_pull(z, c, cap, r, i, ez, eh, ec):
+def zero_pull(z, c, times, cap, r, i, ez, eh, ec):
   match c:
     case True{}:
       +h = H.Route.h(r)
@@ -141,14 +142,14 @@ def zero_pull(z, c, cap, r, i, ez, eh, ec):
       +id = {R.HasId{i} : R.Test}
       +ct = R.Stops.cut(t, id)
       +kp = R.Stops.keep(t, id)
-      +m = PH.Mk(cap, r, T.Route.closed(r), h, ct)
-      +rs = H.Route.reshape(cap, r, T.Route.closed(r), h, ct, kp)
+      +m = PH.Mk(times, cap, r, T.Route.closed(r), h, ct)
+      +rs = H.Route.reshape(times, cap, r, T.Route.closed(r), h, ct, kp)
       +x = JC(z, T.Route.stops(R.Step.route(m)))
       +y = JC(z, R.Step.shed(m))
       %Equal.sym(T.Route, R.Step.route(R.Step.add(kp, m)), R.Step.route(m), PH.step_route(kp, m)) : {JC(z, T.Route.stops(_)) == 0n : Nat}
       L.add_zero_l(x, y,
         Equal.trans(Nat, Nat.add(x, y), Nat.add(JC(z, h), JC(z, ct)), 0n,
-          PR.jc_remake(z, cap, T.Route.crew(r), T.Route.day(r), T.Route.closed(r), h, ct),
+          PR.jc_remake(z, times, cap, T.Route.crew(r), T.Route.day(r), T.Route.closed(r), h, ct),
           L.add_both_zero(JC(z, h), JC(z, ct), zero_any(z, h, i, ez, eh), zero_cut(z, t, i, ez))))
     case False{}:
       +h = H.Route.h(r)
@@ -160,28 +161,29 @@ def zero_pull(z, c, cap, r, i, ez, eh, ec):
 law rc_none:
   for +z: T.Appraisal
   for +routes: RL()
+  for +times: T.Times
   for +cap: Nat
   for +i: Nat
   for +ez: {Nat.is_eq(T.Appraisal.id(z), i) == True{} : Bool}
   for +eg: {H.Routes.locks(routes, i) == False{} : Bool}
-  {RC(z, H.Edited.routes(H.Routes.apply(routes, cap, H.Pull{i}))) == 0n : Nat}
+  {RC(z, H.Edited.routes(H.Routes.apply(routes, times, cap, H.Pull{i}))) == 0n : Nat}
 
-def rc_none(z, routes, cap, i, ez, eg):
+def rc_none(z, routes, times, cap, i, ez, eg):
   match routes:
     case Nil{}:
       {==}
     case +r <> t:
       +pull = {H.Pull{i} : H.Edit}
-      +s = H.Route.apply(cap, pull, r)
-      +rest = H.Routes.apply(t, cap, pull)
+      +s = H.Route.apply(times, cap, pull, r)
+      +rest = H.Routes.apply(t, times, cap, pull)
       +a = R.Stops.any(H.Route.h(r), R.HasId{i})
       +b = H.Routes.locks(t, i)
       %Equal.sym(RL(), H.Edited.routes(H.Edited.cons(s, rest)), R.Step.route(s) <> H.Edited.routes(rest), PP.edited_routes(s, rest)) : {RC(z, _) == 0n : Nat}
       Equal.trans(Nat, RC(z, R.Step.route(s) <> H.Edited.routes(rest)), Nat.add(JC(z, T.Route.stops(R.Step.route(s))), RC(z, H.Edited.routes(rest))), 0n,
         PP.rc_cons(z, R.Step.route(s), H.Edited.routes(rest)),
         L.add_both_zero(JC(z, T.Route.stops(R.Step.route(s))), RC(z, H.Edited.routes(rest)),
-          zero_pull(z, R.Stops.any(H.Route.t(r), R.HasId{i}), cap, r, i, ez, L.or_l(a, b, eg), {==}),
-          rc_none(z, t, cap, i, ez, L.or_r(a, b, eg))))
+          zero_pull(z, R.Stops.any(H.Route.t(r), R.HasId{i}), times, cap, r, i, ez, L.or_l(a, b, eg), {==}),
+          rc_none(z, t, times, cap, i, ez, L.or_r(a, b, eg))))
 
 law ec_other:
   for +z: T.Appraisal
@@ -251,7 +253,7 @@ def forget_same(z, p, i, ez):
       L.add_zero(rc)))
 
 def Cut(+inst: T.Instance, +plan: T.Plan, +i: Nat) -> T.Plan:
-  H.Plan.forget(H.Plan.edit(T.Instance.cap(inst), H.Pull{i}, plan), i)
+  H.Plan.forget(H.Plan.edit(T.Instance.times(inst), T.Instance.cap(inst), H.Pull{i}, plan), i)
 
 # Nothing with this id is left anywhere in the plan.
 law cancel_gone:
@@ -264,10 +266,10 @@ law cancel_gone:
   {J.count(z, P.Plan.placed(Cut(inst, plan, i))) == 0n : Nat}
 
 def cancel_gone(z, inst, plan, i, ez, eg):
-  +p1 = H.Plan.edit(T.Instance.cap(inst), H.Pull{i}, plan)
+  +p1 = H.Plan.edit(T.Instance.times(inst), T.Instance.cap(inst), H.Pull{i}, plan)
   Equal.trans(Nat, J.count(z, P.Plan.placed(H.Plan.forget(p1, i))), RC(z, T.Plan.routes(p1)), 0n,
     forget_same(z, p1, i, ez),
-    rc_none(z, T.Plan.routes(plan), T.Instance.cap(inst), i, ez, eg))
+    rc_none(z, T.Plan.routes(plan), T.Instance.times(inst), T.Instance.cap(inst), i, ez, eg))
 
 law count_cancel:
   for +z: T.Appraisal
@@ -280,14 +282,14 @@ law count_cancel:
 
 def count_cancel(z, inst, plan, i, ev, eg):
   +jobs = T.Instance.jobs(inst)
-  +p1 = H.Plan.edit(T.Instance.cap(inst), H.Pull{i}, plan)
+  +p1 = H.Plan.edit(T.Instance.times(inst), T.Instance.cap(inst), H.Pull{i}, plan)
   +x = J.count(z, P.Plan.placed(H.Plan.forget(p1, i)))
   L.cases(Nat.is_eq(T.Appraisal.id(z), i), {x == J.count(z, J.without(jobs, i)) : Nat},
     +e => Equal.trans(Nat, x, 0n, J.count(z, J.without(jobs, i)), cancel_gone(z, inst, plan, i, e, eg),
       Equal.sym(Nat, J.count(z, J.without(jobs, i)), 0n, PJ.count_without_same(z, jobs, i, e))),
     +e => Equal.trans(Nat, x, J.count(z, P.Plan.placed(p1)), J.count(z, J.without(jobs, i)), forget_other(z, p1, i, e),
       Equal.trans(Nat, J.count(z, P.Plan.placed(p1)), J.count(z, P.Plan.placed(plan)), J.count(z, J.without(jobs, i)),
-        PP.count_edit(z, T.Instance.cap(inst), H.Pull{i}, plan),
+        PP.count_edit(z, T.Instance.times(inst), T.Instance.cap(inst), H.Pull{i}, plan),
         Equal.trans(Nat, J.count(z, P.Plan.placed(plan)), J.count(z, jobs), J.count(z, J.without(jobs, i)),
           PP.count_valid(z, inst, plan, ev),
           Equal.sym(Nat, J.count(z, J.without(jobs, i)), J.count(z, jobs), PJ.count_without_other(z, jobs, i, e))))))
@@ -366,7 +368,7 @@ def cancel_locked(b, inst, plan, i, ev):
     case True{}:
       {==}
     case False{}:
-      PP.locked_routes(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.cap(inst), H.Pull{i}, PP.v_routes(inst, plan, ev), {==})
+      PP.locked_routes(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.times(inst), T.Instance.cap(inst), H.Pull{i}, PP.v_routes(inst, plan, ev), {==})
 
 # Requesting
 # ----------
@@ -559,32 +561,34 @@ def Ins(+r: T.Route, +job: T.Appraisal, +at: Nat) -> ST():
   H.Stops.insert_at(H.Route.t(r), at, NewStop(job))
 
 law open_ins:
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
   for +job: T.Appraisal
   for +at: Nat
-  for +e: {R.Route.ok(cap, r) == True{} : Bool}
+  for +e: {R.Route.ok(times, cap, r) == True{} : Bool}
   {R.Stops.all_open(Ins(r, job, at)) == True{} : Bool}
 
-def open_ins(cap, r, job, at, e):
-  open_insert_at(H.Route.t(r), at, NewStop(job), PH.open_t(cap, r, e), {==})
+def open_ins(times, cap, r, job, at, e):
+  open_insert_at(H.Route.t(r), at, NewStop(job), PH.open_t(times, cap, r, e), {==})
 
 law bag_put:
   for +a: T.Appraisal
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
   for +job: T.Appraisal
   for +at: Nat
-  {PH.Bag(a, H.Route.put(cap, r, job, at)) == Nat.add(J.count.one(a, job), JC(a, T.Route.stops(r))) : Nat}
+  {PH.Bag(a, H.Route.put(times, cap, r, job, at)) == Nat.add(J.count.one(a, job), JC(a, T.Route.stops(r))) : Nat}
 
-def bag_put(a, cap, r, job, at):
+def bag_put(a, times, cap, r, job, at):
   +h = H.Route.h(r)
   +t = H.Route.t(r)
   +n = Ins(r, job, at)
   +o = J.count.one(a, job)
-  Equal.trans(Nat, PH.Bag(a, H.Route.reshape(cap, r, T.Route.closed(r), h, n, Nil{})), Nat.add(JC(a, h), JC(a, n)),
+  Equal.trans(Nat, PH.Bag(a, H.Route.reshape(times, cap, r, T.Route.closed(r), h, n, Nil{})), Nat.add(JC(a, h), JC(a, n)),
     Nat.add(o, JC(a, T.Route.stops(r))),
-    PH.jc_reshape(a, cap, r, T.Route.closed(r), h, n, Nil{}),
+    PH.jc_reshape(a, times, cap, r, T.Route.closed(r), h, n, Nil{}),
     Equal.trans(Nat, Nat.add(JC(a, h), JC(a, n)), Nat.add(JC(a, h), Nat.add(o, JC(a, t))), Nat.add(o, JC(a, T.Route.stops(r))),
       L.add_r(JC(a, h), JC(a, n), Nat.add(o, JC(a, t)),
         Equal.trans(Nat, JC(a, n), Nat.add(Nat.add(o, 0n), JC(a, t)), Nat.add(o, JC(a, t)),
@@ -595,49 +599,53 @@ def bag_put(a, cap, r, job, at):
         L.add_r(o, Nat.add(JC(a, h), JC(a, t)), JC(a, T.Route.stops(r)), PH.bag_route(a, r)))))
 
 law ok_put:
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
   for +job: T.Appraisal
   for +at: Nat
-  for +e: {R.Route.ok(cap, r) == True{} : Bool}
-  {R.Route.ok(cap, R.Step.route(H.Route.put(cap, r, job, at))) == True{} : Bool}
+  for +e: {R.Route.ok(times, cap, r) == True{} : Bool}
+  {R.Route.ok(times, cap, R.Step.route(H.Route.put(times, cap, r, job, at))) == True{} : Bool}
 
-def ok_put(cap, r, job, at, e):
-  PH.ok_reshape(cap, r, T.Route.closed(r), H.Route.h(r), Ins(r, job, at), Nil{}, PH.locked_h(r), open_ins(cap, r, job, at, e))
+def ok_put(times, cap, r, job, at, e):
+  PH.ok_reshape(times, cap, r, T.Route.closed(r), H.Route.h(r), Ins(r, job, at), Nil{}, PH.locked_h(r), open_ins(times, cap, r, job, at, e))
 
 law crew_put:
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
   for +job: T.Appraisal
   for +at: Nat
-  {T.Route.crew(R.Step.route(H.Route.put(cap, r, job, at))) == T.Route.crew(r) : T.Contractor}
+  {T.Route.crew(R.Step.route(H.Route.put(times, cap, r, job, at))) == T.Route.crew(r) : T.Contractor}
 
-def crew_put(cap, r, job, at):
-  PH.crew_reshape(cap, r, T.Route.closed(r), H.Route.h(r), Ins(r, job, at), Nil{})
+def crew_put(times, cap, r, job, at):
+  PH.crew_reshape(times, cap, r, T.Route.closed(r), H.Route.h(r), Ins(r, job, at), Nil{})
 
 law day_put:
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
   for +job: T.Appraisal
   for +at: Nat
-  {T.Route.day(R.Step.route(H.Route.put(cap, r, job, at))) == T.Route.day(r) : Nat}
+  {T.Route.day(R.Step.route(H.Route.put(times, cap, r, job, at))) == T.Route.day(r) : Nat}
 
-def day_put(cap, r, job, at):
-  PH.day_reshape(cap, r, T.Route.closed(r), H.Route.h(r), Ins(r, job, at), Nil{})
+def day_put(times, cap, r, job, at):
+  PH.day_reshape(times, cap, r, T.Route.closed(r), H.Route.h(r), Ins(r, job, at), Nil{})
 
 law lk_put:
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
   for +job: T.Appraisal
   for +at: Nat
-  for +e: {R.Route.ok(cap, r) == True{} : Bool}
-  {PH.Lk(H.Route.put(cap, r, job, at)) == R.Stops.locked(T.Route.stops(r)) : ST()}
+  for +e: {R.Route.ok(times, cap, r) == True{} : Bool}
+  {PH.Lk(H.Route.put(times, cap, r, job, at)) == R.Stops.locked(T.Route.stops(r)) : ST()}
 
-def lk_put(cap, r, job, at, e):
-  Equal.trans(ST(), PH.Lk(H.Route.reshape(cap, r, T.Route.closed(r), H.Route.h(r), Ins(r, job, at), Nil{})),
+def lk_put(times, cap, r, job, at, e):
+  Equal.trans(ST(), PH.Lk(H.Route.reshape(times, cap, r, T.Route.closed(r), H.Route.h(r), Ins(r, job, at), Nil{})),
     H.Route.h(r), R.Stops.locked(T.Route.stops(r)),
-    PH.locked_reshape(cap, r, T.Route.closed(r), H.Route.h(r), Ins(r, job, at), Nil{}, PH.locked_h(r), open_ins(cap, r, job, at, e)),
-    PH.locked_is_h(cap, r, e))
+    PH.locked_reshape(times, cap, r, T.Route.closed(r), H.Route.h(r), Ins(r, job, at), Nil{}, PH.locked_h(r), open_ins(times, cap, r, job, at, e)),
+    PH.locked_is_h(times, cap, r, e))
 
 def Tip(+t: RL()) -> H.Edited:
   H.Edited{t, Nil{}}
@@ -648,25 +656,26 @@ law eb_put_if:
   for +x: Bool
   for +r: T.Route
   for +t: RL()
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +at: Nat
   for +rest: H.Edited
   for +eo: {H.Routes.open_at.if(m, T.Route.closed(r), x) == True{} : Bool}
   for ih: {x == True{} : Bool} -> {PP.EB(z, rest) == Nat.add(J.count.one(z, job), RC(z, t)) : Nat}
-  {PP.EB(z, H.Routes.put.if(m, r, t, cap, job, at, rest)) == Nat.add(J.count.one(z, job), RC(z, r <> t)) : Nat}
+  {PP.EB(z, H.Routes.put.if(m, r, t, times, cap, job, at, rest)) == Nat.add(J.count.one(z, job), RC(z, r <> t)) : Nat}
 
-def eb_put_if(z, m, x, r, t, cap, job, at, rest, eo, ih):
+def eb_put_if(z, m, x, r, t, times, cap, job, at, rest, eo, ih):
   match m:
     case True{}:
       +o = J.count.one(z, job)
       +jr = JC(z, T.Route.stops(r))
       +rt = RC(z, t)
-      +s = H.Route.put(cap, r, job, at)
+      +s = H.Route.put(times, cap, r, job, at)
       Equal.trans(Nat, PP.EB(z, H.Edited.cons(s, Tip(t))), Nat.add(PH.Bag(z, s), PP.EB(z, Tip(t))), Nat.add(o, RC(z, r <> t)),
         PP.eb_cons(z, s, Tip(t)),
         Equal.trans(Nat, Nat.add(PH.Bag(z, s), PP.EB(z, Tip(t))), Nat.add(Nat.add(o, jr), rt), Nat.add(o, RC(z, r <> t)),
-          L.add_both(PH.Bag(z, s), Nat.add(o, jr), PP.EB(z, Tip(t)), rt, bag_put(z, cap, r, job, at), L.add_zero(rt)),
+          L.add_both(PH.Bag(z, s), Nat.add(o, jr), PP.EB(z, Tip(t)), rt, bag_put(z, times, cap, r, job, at), L.add_zero(rt)),
           Equal.trans(Nat, Nat.add(Nat.add(o, jr), rt), Nat.add(o, Nat.add(jr, rt)), Nat.add(o, RC(z, r <> t)),
             L.add_assoc(o, jr, rt),
             L.add_r(o, Nat.add(jr, rt), RC(z, r <> t), Equal.sym(Nat, RC(z, r <> t), Nat.add(jr, rt), PP.rc_cons(z, r, t))))))
@@ -686,118 +695,124 @@ def eb_put_if(z, m, x, r, t, cap, job, at, rest, eo, ih):
 law eb_put:
   for +z: T.Appraisal
   for +routes: RL()
+  for +times: T.Times
   for +cap: Nat
   for +c: Nat
   for +d: Nat
   for +job: T.Appraisal
   for +at: Nat
   for +eo: {H.Routes.open_at(routes, c, d) == True{} : Bool}
-  {PP.EB(z, H.Routes.put(routes, cap, c, d, job, at)) == Nat.add(J.count.one(z, job), RC(z, routes)) : Nat}
+  {PP.EB(z, H.Routes.put(routes, times, cap, c, d, job, at)) == Nat.add(J.count.one(z, job), RC(z, routes)) : Nat}
 
-def eb_put(z, routes, cap, c, d, job, at, eo):
+def eb_put(z, routes, times, cap, c, d, job, at, eo):
   match routes:
     case Nil{}:
-      L.never({PP.EB(z, H.Routes.put(Nil{}, cap, c, d, job, at)) == Nat.add(J.count.one(z, job), RC(z, Nil{})) : Nat}, eo)
+      L.never({PP.EB(z, H.Routes.put(Nil{}, times, cap, c, d, job, at)) == Nat.add(J.count.one(z, job), RC(z, Nil{})) : Nat}, eo)
     case +r <> +t:
-      eb_put_if(z, H.Route.at(r, c, d), H.Routes.open_at(t, c, d), r, t, cap, job, at, H.Routes.put(t, cap, c, d, job, at), eo,
-        +e => eb_put(z, t, cap, c, d, job, at, e))
+      eb_put_if(z, H.Route.at(r, c, d), H.Routes.open_at(t, c, d), r, t, times, cap, job, at, H.Routes.put(t, times, cap, c, d, job, at), eo,
+        +e => eb_put(z, t, times, cap, c, d, job, at, e))
 
 law ok_put_if:
   for +m: Bool
   for +r: T.Route
   for +t: RL()
   for +crews: Crews()
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +at: Nat
   for +rest: H.Edited
-  for +er: {P.Routes.ok(r <> t, crews, cap) == True{} : Bool}
-  for +ih: {P.Routes.ok(H.Edited.routes(rest), crews, cap) == True{} : Bool}
-  {P.Routes.ok(H.Edited.routes(H.Routes.put.if(m, r, t, cap, job, at, rest)), crews, cap) == True{} : Bool}
+  for +er: {P.Routes.ok(r <> t, crews, times, cap) == True{} : Bool}
+  for +ih: {P.Routes.ok(H.Edited.routes(rest), crews, times, cap) == True{} : Bool}
+  {P.Routes.ok(H.Edited.routes(H.Routes.put.if(m, r, t, times, cap, job, at, rest)), crews, times, cap) == True{} : Bool}
 
-def ok_put_if(m, r, t, crews, cap, job, at, rest, er, ih):
+def ok_put_if(m, r, t, crews, times, cap, job, at, rest, er, ih):
   match m:
     case True{}:
-      +hd = PP.routes_head(r, t, crews, cap, er)
-      +s = H.Route.put(cap, r, job, at)
-      PP.routes_cons(s, Tip(t), crews, cap,
-        PP.fine_step(crews, cap, s, r, hd, crew_put(cap, r, job, at), ok_put(cap, r, job, at, PP.ok_of_fine(crews, cap, r, hd))),
-        PP.routes_tail(r, t, crews, cap, er))
+      +hd = PP.routes_head(r, t, crews, times, cap, er)
+      +s = H.Route.put(times, cap, r, job, at)
+      PP.routes_cons(s, Tip(t), crews, times, cap,
+        PP.fine_step(crews, times, cap, s, r, hd, crew_put(times, cap, r, job, at), ok_put(times, cap, r, job, at, PP.ok_of_fine(crews, times, cap, r, hd))),
+        PP.routes_tail(r, t, crews, times, cap, er))
     case False{}:
-      PP.routes_cons(R.Step{r, Nil{}}, rest, crews, cap, PP.routes_head(r, t, crews, cap, er), ih)
+      PP.routes_cons(R.Step{r, Nil{}}, rest, crews, times, cap, PP.routes_head(r, t, crews, times, cap, er), ih)
 
 law ok_put_all:
   for +routes: RL()
   for +crews: Crews()
+  for +times: T.Times
   for +cap: Nat
   for +c: Nat
   for +d: Nat
   for +job: T.Appraisal
   for +at: Nat
-  for +er: {P.Routes.ok(routes, crews, cap) == True{} : Bool}
-  {P.Routes.ok(H.Edited.routes(H.Routes.put(routes, cap, c, d, job, at)), crews, cap) == True{} : Bool}
+  for +er: {P.Routes.ok(routes, crews, times, cap) == True{} : Bool}
+  {P.Routes.ok(H.Edited.routes(H.Routes.put(routes, times, cap, c, d, job, at)), crews, times, cap) == True{} : Bool}
 
-def ok_put_all(routes, crews, cap, c, d, job, at, er):
+def ok_put_all(routes, crews, times, cap, c, d, job, at, er):
   match routes:
     case Nil{}:
       {==}
     case +r <> +t:
-      ok_put_if(H.Route.at(r, c, d), r, t, crews, cap, job, at, H.Routes.put(t, cap, c, d, job, at), er,
-        ok_put_all(t, crews, cap, c, d, job, at, PP.routes_tail(r, t, crews, cap, er)))
+      ok_put_if(H.Route.at(r, c, d), r, t, crews, times, cap, job, at, H.Routes.put(t, times, cap, c, d, job, at), er,
+        ok_put_all(t, crews, times, cap, c, d, job, at, PP.routes_tail(r, t, crews, times, cap, er)))
 
 law slots_put_if:
   for +m: Bool
   for +r: T.Route
   for +t: RL()
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +at: Nat
   for +rest: H.Edited
   for +ih: {P.Routes.slots(H.Edited.routes(rest)) == P.Routes.slots(t) : List<&2, P.Slot>}
-  {P.Routes.slots(H.Edited.routes(H.Routes.put.if(m, r, t, cap, job, at, rest))) == P.Routes.slots(r <> t) : List<&2, P.Slot>}
+  {P.Routes.slots(H.Edited.routes(H.Routes.put.if(m, r, t, times, cap, job, at, rest))) == P.Routes.slots(r <> t) : List<&2, P.Slot>}
 
-def slots_put_if(m, r, t, cap, job, at, rest, ih):
+def slots_put_if(m, r, t, times, cap, job, at, rest, ih):
   match m:
     case True{}:
-      PP.slots_cons(H.Route.put(cap, r, job, at), r, Tip(t), t, crew_put(cap, r, job, at), day_put(cap, r, job, at), {==})
+      PP.slots_cons(H.Route.put(times, cap, r, job, at), r, Tip(t), t, crew_put(times, cap, r, job, at), day_put(times, cap, r, job, at), {==})
     case False{}:
       PP.slots_cons(R.Step{r, Nil{}}, r, rest, t, {==}, {==}, ih)
 
 law slots_put:
   for +routes: RL()
+  for +times: T.Times
   for +cap: Nat
   for +c: Nat
   for +d: Nat
   for +job: T.Appraisal
   for +at: Nat
-  {P.Routes.slots(H.Edited.routes(H.Routes.put(routes, cap, c, d, job, at))) == P.Routes.slots(routes) : List<&2, P.Slot>}
+  {P.Routes.slots(H.Edited.routes(H.Routes.put(routes, times, cap, c, d, job, at))) == P.Routes.slots(routes) : List<&2, P.Slot>}
 
-def slots_put(routes, cap, c, d, job, at):
+def slots_put(routes, times, cap, c, d, job, at):
   match routes:
     case Nil{}:
       {==}
     case +r <> +t:
-      slots_put_if(H.Route.at(r, c, d), r, t, cap, job, at, H.Routes.put(t, cap, c, d, job, at), slots_put(t, cap, c, d, job, at))
+      slots_put_if(H.Route.at(r, c, d), r, t, times, cap, job, at, H.Routes.put(t, times, cap, c, d, job, at), slots_put(t, times, cap, c, d, job, at))
 
 law locked_put_if:
   for +m: Bool
   for +r: T.Route
   for +t: RL()
   for +crews: Crews()
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +at: Nat
   for +rest: H.Edited
-  for +er: {P.Routes.ok(r <> t, crews, cap) == True{} : Bool}
+  for +er: {P.Routes.ok(r <> t, crews, times, cap) == True{} : Bool}
   for +ih: {P.Routes.locked(H.Edited.routes(rest)) == P.Routes.locked(t) : List<&2, ST()>}
-  {P.Routes.locked(H.Edited.routes(H.Routes.put.if(m, r, t, cap, job, at, rest))) == P.Routes.locked(r <> t) : List<&2, ST()>}
+  {P.Routes.locked(H.Edited.routes(H.Routes.put.if(m, r, t, times, cap, job, at, rest))) == P.Routes.locked(r <> t) : List<&2, ST()>}
 
-def locked_put_if(m, r, t, crews, cap, job, at, rest, er, ih):
+def locked_put_if(m, r, t, crews, times, cap, job, at, rest, er, ih):
   match m:
     case True{}:
-      +s = H.Route.put(cap, r, job, at)
+      +s = H.Route.put(times, cap, r, job, at)
       %Equal.sym(List<&2, ST()>, P.Routes.locked(H.Edited.routes(H.Edited.cons(s, Tip(t)))), PH.Lk(s) <> P.Routes.locked(t), PP.locked_cons(s, Tip(t))) : {_ == P.Routes.locked(r <> t) : List<&2, ST()>}
-      %lk_put(cap, r, job, at, PP.ok_of_fine(crews, cap, r, PP.routes_head(r, t, crews, cap, er))) : {PH.Lk(s) <> P.Routes.locked(t) == _ <> P.Routes.locked(t) : List<&2, ST()>}
+      %lk_put(times, cap, r, job, at, PP.ok_of_fine(crews, times, cap, r, PP.routes_head(r, t, crews, times, cap, er))) : {PH.Lk(s) <> P.Routes.locked(t) == _ <> P.Routes.locked(t) : List<&2, ST()>}
       {==}
     case False{}:
       +s = {R.Step{r, Nil{}} : R.Step}
@@ -808,30 +823,32 @@ def locked_put_if(m, r, t, crews, cap, job, at, rest, er, ih):
 law locked_put_all:
   for +routes: RL()
   for +crews: Crews()
+  for +times: T.Times
   for +cap: Nat
   for +c: Nat
   for +d: Nat
   for +job: T.Appraisal
   for +at: Nat
-  for +er: {P.Routes.ok(routes, crews, cap) == True{} : Bool}
-  {P.Routes.locked(H.Edited.routes(H.Routes.put(routes, cap, c, d, job, at))) == P.Routes.locked(routes) : List<&2, ST()>}
+  for +er: {P.Routes.ok(routes, crews, times, cap) == True{} : Bool}
+  {P.Routes.locked(H.Edited.routes(H.Routes.put(routes, times, cap, c, d, job, at))) == P.Routes.locked(routes) : List<&2, ST()>}
 
-def locked_put_all(routes, crews, cap, c, d, job, at, er):
+def locked_put_all(routes, crews, times, cap, c, d, job, at, er):
   match routes:
     case Nil{}:
       {==}
     case +r <> +t:
-      locked_put_if(H.Route.at(r, c, d), r, t, crews, cap, job, at, H.Routes.put(t, cap, c, d, job, at), er,
-        locked_put_all(t, crews, cap, c, d, job, at, PP.routes_tail(r, t, crews, cap, er)))
+      locked_put_if(H.Route.at(r, c, d), r, t, crews, times, cap, job, at, H.Routes.put(t, times, cap, c, d, job, at), er,
+        locked_put_all(t, crews, times, cap, c, d, job, at, PP.routes_tail(r, t, crews, times, cap, er)))
 
 def Taken(+plan: T.Plan, +i: Nat) -> J.Taken:
   J.take(T.Plan.backlog(plan), i)
 
-def Filled(+cap: Nat, +plan: T.Plan, +i: Nat, +job: T.Appraisal, +c: Nat, +d: Nat, +at: Nat) -> T.Plan:
-  H.backfill.put(cap, plan, J.Taken.rest(Taken(plan, i)), job, c, d, at)
+def Filled(+times: T.Times, +cap: Nat, +plan: T.Plan, +i: Nat, +job: T.Appraisal, +c: Nat, +d: Nat, +at: Nat) -> T.Plan:
+  H.backfill.put(times, cap, plan, J.Taken.rest(Taken(plan, i)), job, c, d, at)
 
 law count_fill:
   for +z: T.Appraisal
+  for +times: T.Times
   for +cap: Nat
   for +plan: T.Plan
   for +i: Nat
@@ -841,14 +858,14 @@ law count_fill:
   for +at: Nat
   for +ef: {J.Taken.found(Taken(plan, i)) == Some{job} : Maybe<&2, T.Appraisal>}
   for +eo: {H.Routes.open_at(T.Plan.routes(plan), c, d) == True{} : Bool}
-  {J.count(z, P.Plan.placed(Filled(cap, plan, i, job, c, d, at))) == J.count(z, P.Plan.placed(plan)) : Nat}
+  {J.count(z, P.Plan.placed(Filled(times, cap, plan, i, job, c, d, at))) == J.count(z, P.Plan.placed(plan)) : Nat}
 
-def count_fill(z, cap, plan, i, job, c, d, at, ef, eo):
+def count_fill(z, times, cap, plan, i, job, c, d, at, ef, eo):
   +routes = T.Plan.routes(plan)
   +ex = T.Plan.exceptions(plan)
   +b = T.Plan.backlog(plan)
   +rest = J.Taken.rest(Taken(plan, i))
-  +done = H.Routes.put(routes, cap, c, d, job, at)
+  +done = H.Routes.put(routes, times, cap, c, d, job, at)
   +o = J.count.one(z, job)
   +rc = RC(z, routes)
   +cr = J.count(z, rest)
@@ -857,7 +874,7 @@ def count_fill(z, cap, plan, i, job, c, d, at, ef, eo):
     Nat.add(PP.EB(z, done), Nat.add(cr, xc)), J.count(z, P.Plan.placed(plan)),
     PP.count_with(z, H.Edited.routes(done), H.Edited.shed(done), rest, ex),
     Equal.trans(Nat, Nat.add(PP.EB(z, done), Nat.add(cr, xc)), Nat.add(Nat.add(o, rc), Nat.add(cr, xc)), J.count(z, P.Plan.placed(plan)),
-      L.add_l(PP.EB(z, done), Nat.add(o, rc), Nat.add(cr, xc), eb_put(z, routes, cap, c, d, job, at, eo)),
+      L.add_l(PP.EB(z, done), Nat.add(o, rc), Nat.add(cr, xc), eb_put(z, routes, times, cap, c, d, job, at, eo)),
       Equal.trans(Nat, Nat.add(Nat.add(o, rc), Nat.add(cr, xc)), Nat.add(rc, Nat.add(Nat.add(o, cr), xc)), J.count(z, P.Plan.placed(plan)),
         L.fill_assoc(o, rc, cr, xc),
         Equal.trans(Nat, Nat.add(rc, Nat.add(Nat.add(o, cr), xc)), Nat.add(rc, Nat.add(J.count(z, b), xc)), J.count(z, P.Plan.placed(plan)),
@@ -880,19 +897,19 @@ law agree_fill:
   for +ef: {J.Taken.found(Taken(plan, i)) == Some{job} : Maybe<&2, T.Appraisal>}
   for +eo: {H.Routes.open_at(T.Plan.routes(plan), c, d) == True{} : Bool}
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
-  {PJ.agree(zs, P.Plan.placed(Filled(T.Instance.cap(inst), plan, i, job, c, d, at)), T.Instance.jobs(inst)) == True{} : Bool}
+  {PJ.agree(zs, P.Plan.placed(Filled(T.Instance.times(inst), T.Instance.cap(inst), plan, i, job, c, d, at)), T.Instance.jobs(inst)) == True{} : Bool}
 
 def agree_fill(zs, inst, plan, i, job, c, d, at, ef, eo, ev):
   match zs:
     case Nil{}:
       {==}
     case +z <> t:
-      +x = P.Plan.placed(Filled(T.Instance.cap(inst), plan, i, job, c, d, at))
+      +x = P.Plan.placed(Filled(T.Instance.times(inst), T.Instance.cap(inst), plan, i, job, c, d, at))
       +j = T.Instance.jobs(inst)
       L.and_i(Nat.is_eq(J.count(z, x), J.count(z, j)), PJ.agree(t, x, j),
         L.is_eq_of(J.count(z, x), J.count(z, j),
           Equal.trans(Nat, J.count(z, x), J.count(z, P.Plan.placed(plan)), J.count(z, j),
-            count_fill(z, T.Instance.cap(inst), plan, i, job, c, d, at, ef, eo), PP.count_valid(z, inst, plan, ev))),
+            count_fill(z, T.Instance.times(inst), T.Instance.cap(inst), plan, i, job, c, d, at, ef, eo), PP.count_valid(z, inst, plan, ev))),
         agree_fill(t, inst, plan, i, job, c, d, at, ef, eo, ev))
 
 law valid_fill:
@@ -906,20 +923,21 @@ law valid_fill:
   for +ef: {J.Taken.found(Taken(plan, i)) == Some{job} : Maybe<&2, T.Appraisal>}
   for +eo: {H.Routes.open_at(T.Plan.routes(plan), c, d) == True{} : Bool}
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
-  {P.Plan.valid(inst, Filled(T.Instance.cap(inst), plan, i, job, c, d, at)) == True{} : Bool}
+  {P.Plan.valid(inst, Filled(T.Instance.times(inst), T.Instance.cap(inst), plan, i, job, c, d, at)) == True{} : Bool}
 
 def valid_fill(inst, plan, i, job, c, d, at, ef, eo, ev):
+  +times = T.Instance.times(inst)
   +cap = T.Instance.cap(inst)
   +crews = T.Instance.crews(inst)
-  +next = Filled(cap, plan, i, job, c, d, at)
+  +next = Filled(times, cap, plan, i, job, c, d, at)
   +x = P.Plan.placed(next)
   +j = T.Instance.jobs(inst)
   +routes = T.Plan.routes(plan)
   PP.valid_intro(inst, next, PP.v_inst(inst, plan, ev),
     PJ.same_sort_intro(x, j, PP.v_rising(inst, plan, ev), agree_fill(J.sort(x), inst, plan, i, job, c, d, at, ef, eo, ev), agree_fill(j, inst, plan, i, job, c, d, at, ef, eo, ev)),
-    %Equal.sym(List<&2, P.Slot>, P.Routes.slots(H.Edited.routes(H.Routes.put(routes, cap, c, d, job, at))), P.Routes.slots(routes), slots_put(routes, cap, c, d, job, at)) : {P.Slots.sorted(_) == True{} : Bool}
+    %Equal.sym(List<&2, P.Slot>, P.Routes.slots(H.Edited.routes(H.Routes.put(routes, times, cap, c, d, job, at))), P.Routes.slots(routes), slots_put(routes, times, cap, c, d, job, at)) : {P.Slots.sorted(_) == True{} : Bool}
     PP.v_slots(inst, plan, ev),
-    ok_put_all(routes, crews, cap, c, d, job, at, PP.v_routes(inst, plan, ev)))
+    ok_put_all(routes, crews, times, cap, c, d, job, at, PP.v_routes(inst, plan, ev)))
 
 law valid_check:
   for +o: Bool
@@ -933,7 +951,7 @@ law valid_check:
   for +ef: {J.Taken.found(Taken(plan, i)) == Some{job} : Maybe<&2, T.Appraisal>}
   for +eo: {H.Routes.open_at(T.Plan.routes(plan), c, d) == o : Bool}
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
-  {P.Plan.valid(inst, H.backfill.check(o, T.Instance.cap(inst), plan, J.Taken.rest(Taken(plan, i)), job, c, d, at)) == True{} : Bool}
+  {P.Plan.valid(inst, H.backfill.check(o, T.Instance.times(inst), T.Instance.cap(inst), plan, J.Taken.rest(Taken(plan, i)), job, c, d, at)) == True{} : Bool}
 
 def valid_check(o, inst, plan, i, job, c, d, at, ef, eo, ev):
   match o:
@@ -952,7 +970,7 @@ law valid_go:
   for +at: Nat
   for +ef: {J.Taken.found(Taken(plan, i)) == f : Maybe<&2, T.Appraisal>}
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
-  {P.Plan.valid(inst, H.backfill.go(T.Instance.cap(inst), plan, f, J.Taken.rest(Taken(plan, i)), c, d, at)) == True{} : Bool}
+  {P.Plan.valid(inst, H.backfill.go(T.Instance.times(inst), T.Instance.cap(inst), plan, f, J.Taken.rest(Taken(plan, i)), c, d, at)) == True{} : Bool}
 
 def valid_go(f, inst, plan, i, c, d, at, ef, ev):
   match f:
@@ -969,7 +987,7 @@ law valid_backfill:
   for +d: Nat
   for +at: Nat
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
-  {P.Plan.valid(inst, H.backfill(T.Instance.cap(inst), plan, i, c, d, at)) == True{} : Bool}
+  {P.Plan.valid(inst, H.backfill(T.Instance.times(inst), T.Instance.cap(inst), plan, i, c, d, at)) == True{} : Bool}
 
 def valid_backfill(inst, plan, i, c, d, at, ev):
   valid_go(J.Taken.found(Taken(plan, i)), inst, plan, i, c, d, at, {==}, ev)
@@ -984,12 +1002,12 @@ law locked_check:
   for +d: Nat
   for +at: Nat
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
-  {P.Routes.locked(T.Plan.routes(H.backfill.check(o, T.Instance.cap(inst), plan, rest, job, c, d, at))) == P.Routes.locked(T.Plan.routes(plan)) : List<&2, ST()>}
+  {P.Routes.locked(T.Plan.routes(H.backfill.check(o, T.Instance.times(inst), T.Instance.cap(inst), plan, rest, job, c, d, at))) == P.Routes.locked(T.Plan.routes(plan)) : List<&2, ST()>}
 
 def locked_check(o, inst, plan, rest, job, c, d, at, ev):
   match o:
     case True{}:
-      locked_put_all(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.cap(inst), c, d, job, at, PP.v_routes(inst, plan, ev))
+      locked_put_all(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.times(inst), T.Instance.cap(inst), c, d, job, at, PP.v_routes(inst, plan, ev))
     case False{}:
       {==}
 
@@ -1002,7 +1020,7 @@ law locked_go:
   for +d: Nat
   for +at: Nat
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
-  {P.Routes.locked(T.Plan.routes(H.backfill.go(T.Instance.cap(inst), plan, f, rest, c, d, at))) == P.Routes.locked(T.Plan.routes(plan)) : List<&2, ST()>}
+  {P.Routes.locked(T.Plan.routes(H.backfill.go(T.Instance.times(inst), T.Instance.cap(inst), plan, f, rest, c, d, at))) == P.Routes.locked(T.Plan.routes(plan)) : List<&2, ST()>}
 
 def locked_go(f, inst, plan, rest, c, d, at, ev):
   match f:
@@ -1019,7 +1037,7 @@ law locked_backfill:
   for +d: Nat
   for +at: Nat
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
-  {P.Routes.locked(T.Plan.routes(H.backfill(T.Instance.cap(inst), plan, i, c, d, at))) == P.Routes.locked(T.Plan.routes(plan)) : List<&2, ST()>}
+  {P.Routes.locked(T.Plan.routes(H.backfill(T.Instance.times(inst), T.Instance.cap(inst), plan, i, c, d, at))) == P.Routes.locked(T.Plan.routes(plan)) : List<&2, ST()>}
 
 def locked_backfill(inst, plan, i, c, d, at, ev):
   locked_go(J.Taken.found(Taken(plan, i)), inst, plan, J.Taken.rest(Taken(plan, i)), c, d, at, ev)
@@ -1101,7 +1119,7 @@ law held_edit:
 def held_edit(st, e, ev, eh):
   +inst = H.State.inst(st)
   +plan = H.State.plan(st)
-  PP.locked_routes(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.cap(inst), e, PP.v_routes(inst, plan, ev), eh)
+  PP.locked_routes(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.times(inst), T.Instance.cap(inst), e, PP.v_routes(inst, plan, ev), eh)
 
 law held_change:
   for +st: H.State
@@ -1129,6 +1147,7 @@ def held_change(st, ev, e):
 
 law closed_check:
   for +o: Bool
+  for +times: T.Times
   for +cap: Nat
   for +plan: T.Plan
   for +rest: AL()
@@ -1137,17 +1156,18 @@ law closed_check:
   for +d: Nat
   for +at: Nat
   for +eo: {o == False{} : Bool}
-  {H.backfill.check(o, cap, plan, rest, job, c, d, at) == plan : T.Plan}
+  {H.backfill.check(o, times, cap, plan, rest, job, c, d, at) == plan : T.Plan}
 
-def closed_check(o, cap, plan, rest, job, c, d, at, eo):
+def closed_check(o, times, cap, plan, rest, job, c, d, at, eo):
   match o:
     case True{}:
-      L.clash(True{}, {H.backfill.put(cap, plan, rest, job, c, d, at) == plan : T.Plan}, {==}, eo)
+      L.clash(True{}, {H.backfill.put(times, cap, plan, rest, job, c, d, at) == plan : T.Plan}, {==}, eo)
     case False{}:
       {==}
 
 law closed_go:
   for +f: Maybe<&2, T.Appraisal>
+  for +times: T.Times
   for +cap: Nat
   for +plan: T.Plan
   for +rest: AL()
@@ -1155,16 +1175,17 @@ law closed_go:
   for +d: Nat
   for +at: Nat
   for +eo: {H.Routes.open_at(T.Plan.routes(plan), c, d) == False{} : Bool}
-  {H.backfill.go(cap, plan, f, rest, c, d, at) == plan : T.Plan}
+  {H.backfill.go(times, cap, plan, f, rest, c, d, at) == plan : T.Plan}
 
-def closed_go(f, cap, plan, rest, c, d, at, eo):
+def closed_go(f, times, cap, plan, rest, c, d, at, eo):
   match f:
     case None{}:
       {==}
     case Some{job}:
-      closed_check(H.Routes.open_at(T.Plan.routes(plan), c, d), cap, plan, rest, job, c, d, at, eo)
+      closed_check(H.Routes.open_at(T.Plan.routes(plan), c, d), times, cap, plan, rest, job, c, d, at, eo)
 
 law closed_backfill:
+  for +times: T.Times
   for +cap: Nat
   for +plan: T.Plan
   for +i: Nat
@@ -1172,7 +1193,7 @@ law closed_backfill:
   for +d: Nat
   for +at: Nat
   for +eo: {H.Routes.open_at(T.Plan.routes(plan), c, d) == False{} : Bool}
-  {H.backfill(cap, plan, i, c, d, at) == plan : T.Plan}
+  {H.backfill(times, cap, plan, i, c, d, at) == plan : T.Plan}
 
-def closed_backfill(cap, plan, i, c, d, at, eo):
-  closed_go(J.Taken.found(Taken(plan, i)), cap, plan, J.Taken.rest(Taken(plan, i)), c, d, at, eo)
+def closed_backfill(times, cap, plan, i, c, d, at, eo):
+  closed_go(J.Taken.found(Taken(plan, i)), times, cap, plan, J.Taken.rest(Taken(plan, i)), c, d, at, eo)

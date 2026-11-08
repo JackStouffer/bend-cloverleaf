@@ -130,23 +130,24 @@ def eb_cons(a, s, e):
 law eb_apply:
   for +a: T.Appraisal
   for +routes: RL()
+  for +times: T.Times
   for +cap: Nat
   for +e: H.Edit
-  {EB(a, H.Routes.apply(routes, cap, e)) == RC(a, routes) : Nat}
+  {EB(a, H.Routes.apply(routes, times, cap, e)) == RC(a, routes) : Nat}
 
-def eb_apply(a, routes, cap, e):
+def eb_apply(a, routes, times, cap, e):
   match routes:
     case Nil{}:
       {==}
     case +r <> t:
-      +s = H.Route.apply(cap, e, r)
-      +rest = H.Routes.apply(t, cap, e)
+      +s = H.Route.apply(times, cap, e, r)
+      +rest = H.Routes.apply(t, times, cap, e)
       Equal.trans(Nat, EB(a, H.Edited.cons(s, rest)), Nat.add(PH.Bag(a, s), EB(a, rest)), RC(a, r <> t),
         eb_cons(a, s, rest),
         Equal.trans(Nat, Nat.add(PH.Bag(a, s), EB(a, rest)), Nat.add(JC(a, T.Route.stops(r)), EB(a, rest)), RC(a, r <> t),
-          L.add_l(PH.Bag(a, s), JC(a, T.Route.stops(r)), EB(a, rest), PH.jc_apply(a, cap, e, r)),
+          L.add_l(PH.Bag(a, s), JC(a, T.Route.stops(r)), EB(a, rest), PH.jc_apply(a, times, cap, e, r)),
           Equal.trans(Nat, Nat.add(JC(a, T.Route.stops(r)), EB(a, rest)), Nat.add(JC(a, T.Route.stops(r)), RC(a, t)), RC(a, r <> t),
-            L.add_r(JC(a, T.Route.stops(r)), EB(a, rest), RC(a, t), eb_apply(a, t, cap, e)),
+            L.add_r(JC(a, T.Route.stops(r)), EB(a, rest), RC(a, t), eb_apply(a, t, times, cap, e)),
             Equal.sym(Nat, RC(a, r <> t), Nat.add(JC(a, T.Route.stops(r)), RC(a, t)), rc_cons(a, r, t)))))
 
 law slot_step:
@@ -169,104 +170,112 @@ def ED1(+s: R.Step, +r: T.Route) -> Type:
   {T.Route.day(R.Step.route(s)) == T.Route.day(r) : Nat}
 
 law crew_apply:
+  for +times: T.Times
   for +cap: Nat
   for +e: H.Edit
   for +r: T.Route
-  EC1(H.Route.apply(cap, e, r), r)
+  EC1(H.Route.apply(times, cap, e, r), r)
 
-def crew_apply(cap, e, r):
-  Pair.fst(EC1(H.Route.apply(cap, e, r), r), ED1(H.Route.apply(cap, e, r), r), PH.keeps_apply(cap, e, r))
+def crew_apply(times, cap, e, r):
+  Pair.fst(EC1(H.Route.apply(times, cap, e, r), r), ED1(H.Route.apply(times, cap, e, r), r), PH.keeps_apply(times, cap, e, r))
 
 law day_apply:
+  for +times: T.Times
   for +cap: Nat
   for +e: H.Edit
   for +r: T.Route
-  ED1(H.Route.apply(cap, e, r), r)
+  ED1(H.Route.apply(times, cap, e, r), r)
 
-def day_apply(cap, e, r):
-  Pair.snd(EC1(H.Route.apply(cap, e, r), r), ED1(H.Route.apply(cap, e, r), r), PH.keeps_apply(cap, e, r))
+def day_apply(times, cap, e, r):
+  Pair.snd(EC1(H.Route.apply(times, cap, e, r), r), ED1(H.Route.apply(times, cap, e, r), r), PH.keeps_apply(times, cap, e, r))
 
 law fine_step:
   for +crews: List<&2, T.Contractor>
+  for +times: T.Times
   for +cap: Nat
   for +s: R.Step
   for +r: T.Route
-  for +ef: {P.Route.fine(crews, cap, r) == True{} : Bool}
+  for +ef: {P.Route.fine(crews, times, cap, r) == True{} : Bool}
   for +ec: {T.Route.crew(R.Step.route(s)) == T.Route.crew(r) : T.Contractor}
-  for +eo: {R.Route.ok(cap, R.Step.route(s)) == True{} : Bool}
-  {P.Route.fine(crews, cap, R.Step.route(s)) == True{} : Bool}
+  for +eo: {R.Route.ok(times, cap, R.Step.route(s)) == True{} : Bool}
+  {P.Route.fine(crews, times, cap, R.Step.route(s)) == True{} : Bool}
 
-def fine_step(crews, cap, s, r, ef, ec, eo):
+def fine_step(crews, times, cap, s, r, ef, ec, eo):
   +q = R.Step.route(s)
-  L.and_i(P.Crews.has(crews, T.Route.crew(q)), R.Route.ok(cap, q),
+  L.and_i(P.Crews.has(crews, T.Route.crew(q)), R.Route.ok(times, cap, q),
     %Equal.sym(T.Contractor, T.Route.crew(q), T.Route.crew(r), ec) : {P.Crews.has(crews, _) == True{} : Bool}
-    L.and_l(P.Crews.has(crews, T.Route.crew(r)), R.Route.ok(cap, r), ef),
+    L.and_l(P.Crews.has(crews, T.Route.crew(r)), R.Route.ok(times, cap, r), ef),
     eo)
 
 law ok_of_fine:
   for +crews: List<&2, T.Contractor>
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
-  for +ef: {P.Route.fine(crews, cap, r) == True{} : Bool}
-  {R.Route.ok(cap, r) == True{} : Bool}
+  for +ef: {P.Route.fine(crews, times, cap, r) == True{} : Bool}
+  {R.Route.ok(times, cap, r) == True{} : Bool}
 
-def ok_of_fine(crews, cap, r, ef):
-  L.and_r(P.Crews.has(crews, T.Route.crew(r)), R.Route.ok(cap, r), ef)
+def ok_of_fine(crews, times, cap, r, ef):
+  L.and_r(P.Crews.has(crews, T.Route.crew(r)), R.Route.ok(times, cap, r), ef)
 
 law routes_head:
   for +r: T.Route
   for +t: RL()
   for +crews: List<&2, T.Contractor>
+  for +times: T.Times
   for +cap: Nat
-  for +e: {P.Routes.ok(r <> t, crews, cap) == True{} : Bool}
-  {P.Route.fine(crews, cap, r) == True{} : Bool}
+  for +e: {P.Routes.ok(r <> t, crews, times, cap) == True{} : Bool}
+  {P.Route.fine(crews, times, cap, r) == True{} : Bool}
 
-def routes_head(r, t, crews, cap, e):
-  L.and_l(P.Route.fine(crews, cap, r), P.Routes.ok(t, crews, cap), e)
+def routes_head(r, t, crews, times, cap, e):
+  L.and_l(P.Route.fine(crews, times, cap, r), P.Routes.ok(t, crews, times, cap), e)
 
 law routes_tail:
   for +r: T.Route
   for +t: RL()
   for +crews: List<&2, T.Contractor>
+  for +times: T.Times
   for +cap: Nat
-  for +e: {P.Routes.ok(r <> t, crews, cap) == True{} : Bool}
-  {P.Routes.ok(t, crews, cap) == True{} : Bool}
+  for +e: {P.Routes.ok(r <> t, crews, times, cap) == True{} : Bool}
+  {P.Routes.ok(t, crews, times, cap) == True{} : Bool}
 
-def routes_tail(r, t, crews, cap, e):
-  L.and_r(P.Route.fine(crews, cap, r), P.Routes.ok(t, crews, cap), e)
+def routes_tail(r, t, crews, times, cap, e):
+  L.and_r(P.Route.fine(crews, times, cap, r), P.Routes.ok(t, crews, times, cap), e)
 
 law routes_cons:
   for +s: R.Step
   for +rest: H.Edited
   for +crews: List<&2, T.Contractor>
+  for +times: T.Times
   for +cap: Nat
-  for +ef: {P.Route.fine(crews, cap, R.Step.route(s)) == True{} : Bool}
-  for +et: {P.Routes.ok(H.Edited.routes(rest), crews, cap) == True{} : Bool}
-  {P.Routes.ok(H.Edited.routes(H.Edited.cons(s, rest)), crews, cap) == True{} : Bool}
+  for +ef: {P.Route.fine(crews, times, cap, R.Step.route(s)) == True{} : Bool}
+  for +et: {P.Routes.ok(H.Edited.routes(rest), crews, times, cap) == True{} : Bool}
+  {P.Routes.ok(H.Edited.routes(H.Edited.cons(s, rest)), crews, times, cap) == True{} : Bool}
 
-def routes_cons(s, rest, crews, cap, ef, et):
+def routes_cons(s, rest, crews, times, cap, ef, et):
   +q = R.Step.route(s)
-  %Equal.sym(RL(), H.Edited.routes(H.Edited.cons(s, rest)), q <> H.Edited.routes(rest), edited_routes(s, rest)) : {P.Routes.ok(_, crews, cap) == True{} : Bool}
-  L.and_i(P.Route.fine(crews, cap, q), P.Routes.ok(H.Edited.routes(rest), crews, cap), ef, et)
+  %Equal.sym(RL(), H.Edited.routes(H.Edited.cons(s, rest)), q <> H.Edited.routes(rest), edited_routes(s, rest)) : {P.Routes.ok(_, crews, times, cap) == True{} : Bool}
+  L.and_i(P.Route.fine(crews, times, cap, q), P.Routes.ok(H.Edited.routes(rest), crews, times, cap), ef, et)
 
 law ok_routes:
   for +routes: RL()
   for +crews: List<&2, T.Contractor>
+  for +times: T.Times
   for +cap: Nat
   for +e: H.Edit
-  for +er: {P.Routes.ok(routes, crews, cap) == True{} : Bool}
-  {P.Routes.ok(H.Edited.routes(H.Routes.apply(routes, cap, e)), crews, cap) == True{} : Bool}
+  for +er: {P.Routes.ok(routes, crews, times, cap) == True{} : Bool}
+  {P.Routes.ok(H.Edited.routes(H.Routes.apply(routes, times, cap, e)), crews, times, cap) == True{} : Bool}
 
-def ok_routes(routes, crews, cap, e, er):
+def ok_routes(routes, crews, times, cap, e, er):
   match routes:
     case Nil{}:
       {==}
     case +r <> t:
-      +s = H.Route.apply(cap, e, r)
-      +hd = routes_head(r, t, crews, cap, er)
-      routes_cons(s, H.Routes.apply(t, cap, e), crews, cap,
-        fine_step(crews, cap, s, r, hd, crew_apply(cap, e, r), PH.ok_apply(cap, e, r, ok_of_fine(crews, cap, r, hd))),
-        ok_routes(t, crews, cap, e, routes_tail(r, t, crews, cap, er)))
+      +s = H.Route.apply(times, cap, e, r)
+      +hd = routes_head(r, t, crews, times, cap, er)
+      routes_cons(s, H.Routes.apply(t, times, cap, e), crews, times, cap,
+        fine_step(crews, times, cap, s, r, hd, crew_apply(times, cap, e, r), PH.ok_apply(times, cap, e, r, ok_of_fine(crews, times, cap, r, hd))),
+        ok_routes(t, crews, times, cap, e, routes_tail(r, t, crews, times, cap, er)))
 
 law slots_cons:
   for +s: R.Step
@@ -287,16 +296,17 @@ def slots_cons(s, r, rest, t, ec, ed, eh):
 
 law slots_apply:
   for +routes: RL()
+  for +times: T.Times
   for +cap: Nat
   for +e: H.Edit
-  {P.Routes.slots(H.Edited.routes(H.Routes.apply(routes, cap, e))) == P.Routes.slots(routes) : List<&2, P.Slot>}
+  {P.Routes.slots(H.Edited.routes(H.Routes.apply(routes, times, cap, e))) == P.Routes.slots(routes) : List<&2, P.Slot>}
 
-def slots_apply(routes, cap, e):
+def slots_apply(routes, times, cap, e):
   match routes:
     case Nil{}:
       {==}
     case +r <> t:
-      slots_cons(H.Route.apply(cap, e, r), r, H.Routes.apply(t, cap, e), t, crew_apply(cap, e, r), day_apply(cap, e, r), slots_apply(t, cap, e))
+      slots_cons(H.Route.apply(times, cap, e, r), r, H.Routes.apply(t, times, cap, e), t, crew_apply(times, cap, e, r), day_apply(times, cap, e, r), slots_apply(t, times, cap, e))
 
 law locked_cons:
   for +s: R.Step
@@ -310,22 +320,23 @@ def locked_cons(s, rest):
 law locked_routes:
   for +routes: RL()
   for +crews: List<&2, T.Contractor>
+  for +times: T.Times
   for +cap: Nat
   for +e: H.Edit
-  for +er: {P.Routes.ok(routes, crews, cap) == True{} : Bool}
+  for +er: {P.Routes.ok(routes, crews, times, cap) == True{} : Bool}
   for +eh: {PH.Heals(e) == True{} : Bool}
-  {P.Routes.locked(H.Edited.routes(H.Routes.apply(routes, cap, e))) == P.Routes.locked(routes) : List<&2, ST()>}
+  {P.Routes.locked(H.Edited.routes(H.Routes.apply(routes, times, cap, e))) == P.Routes.locked(routes) : List<&2, ST()>}
 
-def locked_routes(routes, crews, cap, e, er, eh):
+def locked_routes(routes, crews, times, cap, e, er, eh):
   match routes:
     case Nil{}:
       {==}
     case +r <> t:
-      +s = H.Route.apply(cap, e, r)
-      +rest = H.Routes.apply(t, cap, e)
+      +s = H.Route.apply(times, cap, e, r)
+      +rest = H.Routes.apply(t, times, cap, e)
       %Equal.sym(List<&2, ST()>, P.Routes.locked(H.Edited.routes(H.Edited.cons(s, rest))), PH.Lk(s) <> P.Routes.locked(H.Edited.routes(rest)), locked_cons(s, rest)) : {_ == P.Routes.locked(r <> t) : List<&2, ST()>}
-      %PH.locked_apply(cap, e, r, ok_of_fine(crews, cap, r, routes_head(r, t, crews, cap, er)), eh) : {PH.Lk(s) <> P.Routes.locked(H.Edited.routes(rest)) == _ <> P.Routes.locked(t) : List<&2, ST()>}
-      %locked_routes(t, crews, cap, e, routes_tail(r, t, crews, cap, er), eh) : {PH.Lk(s) <> P.Routes.locked(H.Edited.routes(rest)) == PH.Lk(s) <> _ : List<&2, ST()>}
+      %PH.locked_apply(times, cap, e, r, ok_of_fine(crews, times, cap, r, routes_head(r, t, crews, times, cap, er)), eh) : {PH.Lk(s) <> P.Routes.locked(H.Edited.routes(rest)) == _ <> P.Routes.locked(t) : List<&2, ST()>}
+      %locked_routes(t, crews, times, cap, e, routes_tail(r, t, crews, times, cap, er), eh) : {PH.Lk(s) <> P.Routes.locked(H.Edited.routes(rest)) == PH.Lk(s) <> _ : List<&2, ST()>}
       {==}
 
 # Plan.edit
@@ -333,29 +344,30 @@ def locked_routes(routes, crews, cap, e, er, eh):
 
 law count_edit:
   for +a: T.Appraisal
+  for +times: T.Times
   for +cap: Nat
   for +e: H.Edit
   for +plan: T.Plan
-  {J.count(a, P.Plan.placed(H.Plan.edit(cap, e, plan))) == J.count(a, P.Plan.placed(plan)) : Nat}
+  {J.count(a, P.Plan.placed(H.Plan.edit(times, cap, e, plan))) == J.count(a, P.Plan.placed(plan)) : Nat}
 
-def count_edit(a, cap, e, plan):
+def count_edit(a, times, cap, e, plan):
   +routes = T.Plan.routes(plan)
   +b = T.Plan.backlog(plan)
   +ex = T.Plan.exceptions(plan)
-  +done = H.Routes.apply(routes, cap, e)
+  +done = H.Routes.apply(routes, times, cap, e)
   Equal.trans(Nat, J.count(a, P.Plan.placed(H.Plan.with(H.Edited.routes(done), H.Edited.shed(done), b, ex))),
     Nat.add(EB(a, done), Nat.add(J.count(a, b), EC(a, ex))), J.count(a, P.Plan.placed(plan)),
     count_with(a, H.Edited.routes(done), H.Edited.shed(done), b, ex),
     Equal.trans(Nat, Nat.add(EB(a, done), Nat.add(J.count(a, b), EC(a, ex))), Nat.add(RC(a, routes), Nat.add(J.count(a, b), EC(a, ex))),
       J.count(a, P.Plan.placed(plan)),
-      L.add_l(EB(a, done), RC(a, routes), Nat.add(J.count(a, b), EC(a, ex)), eb_apply(a, routes, cap, e)),
+      L.add_l(EB(a, done), RC(a, routes), Nat.add(J.count(a, b), EC(a, ex)), eb_apply(a, routes, times, cap, e)),
       Equal.sym(Nat, J.count(a, P.Plan.placed(plan)), Nat.add(RC(a, routes), Nat.add(J.count(a, b), EC(a, ex))), placed_count(a, plan))))
 
 # Plan.valid, part by part
 # ------------------------
 
 def Routes3(+inst: T.Instance, +plan: T.Plan) -> Bool:
-  P.Routes.ok(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.cap(inst))
+  P.Routes.ok(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.times(inst), T.Instance.cap(inst))
 
 def Rest2(+inst: T.Instance, +plan: T.Plan) -> Bool:
   Bool.and(P.Slots.sorted(P.Routes.slots(T.Plan.routes(plan))), Routes3(inst, plan))
@@ -495,7 +507,7 @@ def count_valid(a, inst, plan, e):
 # --------------------------------
 
 def Edit2(+inst: T.Instance, +e: H.Edit, +plan: T.Plan) -> T.Plan:
-  H.Plan.edit(T.Instance.cap(inst), e, plan)
+  H.Plan.edit(T.Instance.times(inst), T.Instance.cap(inst), e, plan)
 
 law agree_edit:
   for +zs: AL()
@@ -515,7 +527,7 @@ def agree_edit(zs, inst, e, plan, ev):
       L.and_i(Nat.is_eq(J.count(z, x), J.count(z, j)), PJ.agree(t, x, j),
         L.is_eq_of(J.count(z, x), J.count(z, j),
           Equal.trans(Nat, J.count(z, x), J.count(z, P.Plan.placed(plan)), J.count(z, j),
-            count_edit(z, T.Instance.cap(inst), e, plan), count_valid(z, inst, plan, ev))),
+            count_edit(z, T.Instance.times(inst), T.Instance.cap(inst), e, plan), count_valid(z, inst, plan, ev))),
         agree_edit(t, inst, e, plan, ev))
 
 law valid_edit:
@@ -526,14 +538,15 @@ law valid_edit:
   {P.Plan.valid(inst, Edit2(inst, e, plan)) == True{} : Bool}
 
 def valid_edit(inst, e, plan, ev):
+  +times = T.Instance.times(inst)
   +cap = T.Instance.cap(inst)
   +crews = T.Instance.crews(inst)
   +next = Edit2(inst, e, plan)
   +x = P.Plan.placed(next)
   +j = T.Instance.jobs(inst)
-  +done = H.Routes.apply(T.Plan.routes(plan), cap, e)
+  +done = H.Routes.apply(T.Plan.routes(plan), times, cap, e)
   valid_intro(inst, next, v_inst(inst, plan, ev),
     PJ.same_sort_intro(x, j, v_rising(inst, plan, ev), agree_edit(J.sort(x), inst, e, plan, ev), agree_edit(j, inst, e, plan, ev)),
-    %Equal.sym(List<&2, P.Slot>, P.Routes.slots(H.Edited.routes(done)), P.Routes.slots(T.Plan.routes(plan)), slots_apply(T.Plan.routes(plan), cap, e)) : {P.Slots.sorted(_) == True{} : Bool}
+    %Equal.sym(List<&2, P.Slot>, P.Routes.slots(H.Edited.routes(done)), P.Routes.slots(T.Plan.routes(plan)), slots_apply(T.Plan.routes(plan), times, cap, e)) : {P.Slots.sorted(_) == True{} : Bool}
     v_slots(inst, plan, ev),
-    ok_routes(T.Plan.routes(plan), crews, cap, e, v_routes(inst, plan, ev)))
+    ok_routes(T.Plan.routes(plan), crews, times, cap, e, v_routes(inst, plan, ev)))

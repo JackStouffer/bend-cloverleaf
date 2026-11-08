@@ -172,7 +172,7 @@ law overtime_is_recorded:
   for +r: T.Route
   for +ev: Valid(inst, plan)
   for +on: OnPlan(plan, n, r)
-  {T.Audit.overtime(T.Route.audit(r)) == Nat.is_gt(R.Route.worked(Crew(r), T.Route.stops(r)), T.Contractor.max_minutes(Crew(r))) : Bool}
+  {T.Audit.overtime(T.Route.audit(r)) == Nat.is_gt(R.Route.worked(T.Instance.times(inst), Crew(r), T.Route.stops(r)), T.Contractor.max_minutes(Crew(r))) : Bool}
 
 # The off-day flag is set exactly when the contractor isn't available that day.
 law off_day_is_recorded:
@@ -219,7 +219,7 @@ law outside_work_within_cap:
   for +r: T.Route
   for +ev: Valid(inst, plan)
   for +on: OnPlan(plan, n, r)
-  {Nat.is_le(R.Route.extra(Crew(r), T.Route.stops(r)), T.Instance.cap(inst)) == True{} : Bool}
+  {Nat.is_le(R.Route.extra(T.Instance.times(inst), Crew(r), T.Route.stops(r)), T.Instance.cap(inst)) == True{} : Bool}
 
 # Healing
 # -------
@@ -286,6 +286,7 @@ law request_from_another_state_changes_nothing:
   {H.request(inst, plan, job) == H.State{inst, plan} : H.State}
 
 law closed_route_takes_no_new_work:
+  for +times: T.Times
   for +cap: Nat
   for +plan: T.Plan
   for +i: Nat
@@ -293,7 +294,7 @@ law closed_route_takes_no_new_work:
   for +d: Nat
   for +at: Nat
   for +closed: {H.Routes.open_at(T.Plan.routes(plan), c, d) == False{} : Bool}
-  {H.backfill(cap, plan, i, c, d, at) == plan : T.Plan}
+  {H.backfill(times, cap, plan, i, c, d, at) == plan : T.Plan}
 
 # Planning
 # --------
@@ -320,53 +321,58 @@ law solved_plan_is_valid:
 
 # The planner only considers a route that takes new work.
 law candidate_route_is_open:
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +outside: Bool
   for +r: T.Route
   for +c: S.Cand
-  for +e: {S.Select.one(cap, job, outside, r) == Some{c} : Maybe<&2, S.Cand>}
+  for +e: {S.Select.one(times, cap, job, outside, r) == Some{c} : Maybe<&2, S.Cand>}
   {T.Route.closed(r) == False{} : Bool}
 
 # On or before the appraisal's deadline.
 law candidate_meets_deadline:
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +outside: Bool
   for +r: T.Route
   for +c: S.Cand
-  for +e: {S.Select.one(cap, job, outside, r) == Some{c} : Maybe<&2, S.Cand>}
+  for +e: {S.Select.one(times, cap, job, outside, r) == Some{c} : Maybe<&2, S.Cand>}
   {Nat.is_le(T.Route.day(r), T.Appraisal.due(job)) == True{} : Bool}
 
 # And with the hours left: the route so far, the added drive and the time on site.
 law candidate_within_hours:
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +outside: Bool
   for +r: T.Route
   for +c: S.Cand
-  for +e: {S.Select.one(cap, job, outside, r) == Some{c} : Maybe<&2, S.Cand>}
-  {Nat.is_le(Nat.add(Nat.add(T.Audit.minutes(T.Route.audit(r)), S.Spot.added(S.Select.spot(r, T.Appraisal.site(job)))), T.Appraisal.minutes(job)), T.Contractor.max_minutes(Crew(r))) == True{} : Bool}
+  for +e: {S.Select.one(times, cap, job, outside, r) == Some{c} : Maybe<&2, S.Cand>}
+  {Nat.is_le(Nat.add(Nat.add(T.Audit.minutes(T.Route.audit(r)), S.Spot.added(S.Select.spot(times, r, T.Appraisal.site(job)))), T.Appraisal.minutes(job)), T.Contractor.max_minutes(Crew(r))) == True{} : Bool}
 
 # The first search stays inside the contractor's zips.
 law inside_search_stays_in_zip:
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +r: T.Route
   for +c: S.Cand
-  for +e: {S.Select.one(cap, job, False{}, r) == Some{c} : Maybe<&2, S.Cand>}
+  for +e: {S.Select.one(times, cap, job, False{}, r) == Some{c} : Maybe<&2, S.Cand>}
   {R.Nats.has(T.Contractor.zips(Crew(r)), T.Appraisal.zip(job)) == True{} : Bool}
 
 # A job with a deadline past the horizon can wait, so it never crosses a zip
 # boundary: with no in-zip route it stays off the routes.
 law only_urgent_work_leaves_zip:
   for +d: Nat
+  for +times: T.Times
   for +cap: Nat
   for +last: Nat
   for +w: S.Work
   for +job: T.Appraisal
   for +later: {Nat.is_lt(T.Appraisal.due(job), last) == False{} : Bool}
-  {S.Work.tree(S.place(None{}, d, cap, last, w, job)) == S.Work.tree(w) : S.Forest}
+  {S.Work.tree(S.place(None{}, d, times, cap, last, w, job)) == S.Work.tree(w) : S.Forest}
 
 law optimizer_never_worsens_score:
   for +fuel: Nat
@@ -385,10 +391,11 @@ law optimizer_keeps_plan_valid:
 law parallel_search_matches_sequential:
   for +t: S.Forest
   for +d: Nat
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +outside: Bool
-  {S.Select.tree(t, d, cap, job, outside) == S.Select.seq(S.Forest.routes(t), cap, job, outside) : Maybe<&2, S.Cand>}
+  {S.Select.tree(t, d, times, cap, job, outside) == S.Select.seq(S.Forest.routes(t), times, cap, job, outside) : Maybe<&2, S.Cand>}
 
 law parallel_check_matches_sequential:
   for +inst: T.Instance

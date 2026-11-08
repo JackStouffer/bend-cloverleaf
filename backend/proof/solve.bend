@@ -142,30 +142,32 @@ def better_assoc(a, b, c):
 law seq_append:
   for +xs: RL()
   for +ys: RL()
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +outside: Bool
-  {S.Select.seq(List.append(&2, T.Route, xs, ys), cap, job, outside) == S.better(S.Select.seq(xs, cap, job, outside), S.Select.seq(ys, cap, job, outside)) : MC()}
+  {S.Select.seq(List.append(&2, T.Route, xs, ys), times, cap, job, outside) == S.better(S.Select.seq(xs, times, cap, job, outside), S.Select.seq(ys, times, cap, job, outside)) : MC()}
 
-def seq_append(xs, ys, cap, job, outside):
+def seq_append(xs, ys, times, cap, job, outside):
   match xs:
     case Nil{}:
       {==}
     case +r <> t:
-      +o = S.Select.one(cap, job, outside, r)
-      +st = S.Select.seq(t, cap, job, outside)
-      +sy = S.Select.seq(ys, cap, job, outside)
-      Equal.trans(MC(), S.better(o, S.Select.seq(List.append(&2, T.Route, t, ys), cap, job, outside)), S.better(o, S.better(st, sy)), S.better(S.better(o, st), sy),
-        Equal.cong(MC(), MC(), m => S.better(o, m), S.Select.seq(List.append(&2, T.Route, t, ys), cap, job, outside), S.better(st, sy), seq_append(t, ys, cap, job, outside)),
+      +o = S.Select.one(times, cap, job, outside, r)
+      +st = S.Select.seq(t, times, cap, job, outside)
+      +sy = S.Select.seq(ys, times, cap, job, outside)
+      Equal.trans(MC(), S.better(o, S.Select.seq(List.append(&2, T.Route, t, ys), times, cap, job, outside)), S.better(o, S.better(st, sy)), S.better(S.better(o, st), sy),
+        Equal.cong(MC(), MC(), m => S.better(o, m), S.Select.seq(List.append(&2, T.Route, t, ys), times, cap, job, outside), S.better(st, sy), seq_append(t, ys, times, cap, job, outside)),
         Equal.sym(MC(), S.better(S.better(o, st), sy), S.better(o, S.better(st, sy)), better_assoc(o, st, sy)))
 
 law tree_seq:
   for +t: S.Forest
   for +d: Nat
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +outside: Bool
-  {S.Select.tree(t, d, cap, job, outside) == S.Select.seq(S.Forest.routes(t), cap, job, outside) : MC()}
+  {S.Select.tree(t, d, times, cap, job, outside) == S.Select.seq(S.Forest.routes(t), times, cap, job, outside) : MC()}
 
 law tree_fork:
   for +a: MC()
@@ -181,7 +183,7 @@ def tree_fork(a, b, c, d, ea, eb):
   %eb : {S.better(a, b) == S.better(a, _) : MC()}
   {==}
 
-def tree_seq(t, d, cap, job, outside):
+def tree_seq(t, d, times, cap, job, outside):
   match t:
     case S.Bare{}:
       {==}
@@ -190,19 +192,19 @@ def tree_seq(t, d, cap, job, outside):
     case S.Fork{k, l, r}:
       match d:
         case 0n:
-          +sl = S.Select.seq(S.Forest.routes(l), cap, job, outside)
-          +sr = S.Select.seq(S.Forest.routes(r), cap, job, outside)
-          +all = S.Select.seq(List.append(&2, T.Route, S.Forest.routes(l), S.Forest.routes(r)), cap, job, outside)
-          Equal.trans(MC(), S.better(S.Select.tree(l, 0n, cap, job, outside), S.Select.tree(r, 0n, cap, job, outside)), S.better(sl, sr), all,
-            tree_fork(S.Select.tree(l, 0n, cap, job, outside), S.Select.tree(r, 0n, cap, job, outside), sl, sr, tree_seq(l, 0n, cap, job, outside), tree_seq(r, 0n, cap, job, outside)),
-            Equal.sym(MC(), all, S.better(sl, sr), seq_append(S.Forest.routes(l), S.Forest.routes(r), cap, job, outside)))
+          +sl = S.Select.seq(S.Forest.routes(l), times, cap, job, outside)
+          +sr = S.Select.seq(S.Forest.routes(r), times, cap, job, outside)
+          +all = S.Select.seq(List.append(&2, T.Route, S.Forest.routes(l), S.Forest.routes(r)), times, cap, job, outside)
+          Equal.trans(MC(), S.better(S.Select.tree(l, 0n, times, cap, job, outside), S.Select.tree(r, 0n, times, cap, job, outside)), S.better(sl, sr), all,
+            tree_fork(S.Select.tree(l, 0n, times, cap, job, outside), S.Select.tree(r, 0n, times, cap, job, outside), sl, sr, tree_seq(l, 0n, times, cap, job, outside), tree_seq(r, 0n, times, cap, job, outside)),
+            Equal.sym(MC(), all, S.better(sl, sr), seq_append(S.Forest.routes(l), S.Forest.routes(r), times, cap, job, outside)))
         case 1n+e:
-          +sl = S.Select.seq(S.Forest.routes(l), cap, job, outside)
-          +sr = S.Select.seq(S.Forest.routes(r), cap, job, outside)
-          +all = S.Select.seq(List.append(&2, T.Route, S.Forest.routes(l), S.Forest.routes(r)), cap, job, outside)
-          Equal.trans(MC(), S.better(S.Select.tree(l, e, cap, job, outside), S.Select.tree(r, e, cap, job, outside)), S.better(sl, sr), all,
-            tree_fork(S.Select.tree(l, e, cap, job, outside), S.Select.tree(r, e, cap, job, outside), sl, sr, tree_seq(l, e, cap, job, outside), tree_seq(r, e, cap, job, outside)),
-            Equal.sym(MC(), all, S.better(sl, sr), seq_append(S.Forest.routes(l), S.Forest.routes(r), cap, job, outside)))
+          +sl = S.Select.seq(S.Forest.routes(l), times, cap, job, outside)
+          +sr = S.Select.seq(S.Forest.routes(r), times, cap, job, outside)
+          +all = S.Select.seq(List.append(&2, T.Route, S.Forest.routes(l), S.Forest.routes(r)), times, cap, job, outside)
+          Equal.trans(MC(), S.better(S.Select.tree(l, e, times, cap, job, outside), S.Select.tree(r, e, times, cap, job, outside)), S.better(sl, sr), all,
+            tree_fork(S.Select.tree(l, e, times, cap, job, outside), S.Select.tree(r, e, times, cap, job, outside), sl, sr, tree_seq(l, e, times, cap, job, outside), tree_seq(r, e, times, cap, job, outside)),
+            Equal.sym(MC(), all, S.better(sl, sr), seq_append(S.Forest.routes(l), S.Forest.routes(r), times, cap, job, outside)))
 
 # The parallel checker
 # --------------------
@@ -227,19 +229,20 @@ law ok_append:
   for +xs: RL()
   for +ys: RL()
   for +crews: Crews()
+  for +times: T.Times
   for +cap: Nat
-  {P.Routes.ok(List.append(&2, T.Route, xs, ys), crews, cap) == Bool.and(P.Routes.ok(xs, crews, cap), P.Routes.ok(ys, crews, cap)) : Bool}
+  {P.Routes.ok(List.append(&2, T.Route, xs, ys), crews, times, cap) == Bool.and(P.Routes.ok(xs, crews, times, cap), P.Routes.ok(ys, crews, times, cap)) : Bool}
 
-def ok_append(xs, ys, crews, cap):
+def ok_append(xs, ys, crews, times, cap):
   match xs:
     case Nil{}:
       {==}
     case +r <> t:
-      +f = P.Route.fine(crews, cap, r)
-      +o = P.Routes.ok(t, crews, cap)
-      +y = P.Routes.ok(ys, crews, cap)
-      Equal.trans(Bool, Bool.and(f, P.Routes.ok(List.append(&2, T.Route, t, ys), crews, cap)), Bool.and(f, Bool.and(o, y)), Bool.and(Bool.and(f, o), y),
-        Equal.cong(Bool, Bool, b => Bool.and(f, b), P.Routes.ok(List.append(&2, T.Route, t, ys), crews, cap), Bool.and(o, y), ok_append(t, ys, crews, cap)),
+      +f = P.Route.fine(crews, times, cap, r)
+      +o = P.Routes.ok(t, crews, times, cap)
+      +y = P.Routes.ok(ys, crews, times, cap)
+      Equal.trans(Bool, Bool.and(f, P.Routes.ok(List.append(&2, T.Route, t, ys), crews, times, cap)), Bool.and(f, Bool.and(o, y)), Bool.and(Bool.and(f, o), y),
+        Equal.cong(Bool, Bool, b => Bool.and(f, b), P.Routes.ok(List.append(&2, T.Route, t, ys), crews, times, cap), Bool.and(o, y), ok_append(t, ys, crews, times, cap)),
         L.and_assoc(f, o, y))
 
 law ok_par:
@@ -247,8 +250,9 @@ law ok_par:
   for +size: Nat
   for +routes: RL()
   for +crews: Crews()
+  for +times: T.Times
   for +cap: Nat
-  {P.Routes.ok_par(fuel, size, routes, crews, cap) == P.Routes.ok(routes, crews, cap) : Bool}
+  {P.Routes.ok_par(fuel, size, routes, crews, times, cap) == P.Routes.ok(routes, crews, times, cap) : Bool}
 
 law and_both:
   for +a: Bool
@@ -264,7 +268,7 @@ def and_both(a, b, c, d, ea, eb):
   %eb : {Bool.and(a, b) == Bool.and(a, _) : Bool}
   {==}
 
-def ok_par(fuel, size, routes, crews, cap):
+def ok_par(fuel, size, routes, crews, times, cap):
   match fuel:
     case 0n:
       {==}
@@ -272,13 +276,13 @@ def ok_par(fuel, size, routes, crews, cap):
       +half = Nat.div(size, 2n)
       +l = List.take(&2, T.Route, routes, half)
       +r = List.drop(&2, T.Route, routes, half)
-      Equal.trans(Bool, Bool.and(P.Routes.ok_par(f, half, l, crews, cap), P.Routes.ok_par(f, Nat.sub(size, half), r, crews, cap)),
-        Bool.and(P.Routes.ok(l, crews, cap), P.Routes.ok(r, crews, cap)), P.Routes.ok(routes, crews, cap),
-        and_both(P.Routes.ok_par(f, half, l, crews, cap), P.Routes.ok_par(f, Nat.sub(size, half), r, crews, cap), P.Routes.ok(l, crews, cap), P.Routes.ok(r, crews, cap),
-          ok_par(f, half, l, crews, cap), ok_par(f, Nat.sub(size, half), r, crews, cap)),
-        Equal.trans(Bool, Bool.and(P.Routes.ok(l, crews, cap), P.Routes.ok(r, crews, cap)), P.Routes.ok(List.append(&2, T.Route, l, r), crews, cap), P.Routes.ok(routes, crews, cap),
-          Equal.sym(Bool, P.Routes.ok(List.append(&2, T.Route, l, r), crews, cap), Bool.and(P.Routes.ok(l, crews, cap), P.Routes.ok(r, crews, cap)), ok_append(l, r, crews, cap)),
-          Equal.cong(RL(), Bool, q => P.Routes.ok(q, crews, cap), List.append(&2, T.Route, l, r), routes, take_drop(T.Route, routes, half))))
+      Equal.trans(Bool, Bool.and(P.Routes.ok_par(f, half, l, crews, times, cap), P.Routes.ok_par(f, Nat.sub(size, half), r, crews, times, cap)),
+        Bool.and(P.Routes.ok(l, crews, times, cap), P.Routes.ok(r, crews, times, cap)), P.Routes.ok(routes, crews, times, cap),
+        and_both(P.Routes.ok_par(f, half, l, crews, times, cap), P.Routes.ok_par(f, Nat.sub(size, half), r, crews, times, cap), P.Routes.ok(l, crews, times, cap), P.Routes.ok(r, crews, times, cap),
+          ok_par(f, half, l, crews, times, cap), ok_par(f, Nat.sub(size, half), r, crews, times, cap)),
+        Equal.trans(Bool, Bool.and(P.Routes.ok(l, crews, times, cap), P.Routes.ok(r, crews, times, cap)), P.Routes.ok(List.append(&2, T.Route, l, r), crews, times, cap), P.Routes.ok(routes, crews, times, cap),
+          Equal.sym(Bool, P.Routes.ok(List.append(&2, T.Route, l, r), crews, times, cap), Bool.and(P.Routes.ok(l, crews, times, cap), P.Routes.ok(r, crews, times, cap)), ok_append(l, r, crews, times, cap)),
+          Equal.cong(RL(), Bool, q => P.Routes.ok(q, crews, times, cap), List.append(&2, T.Route, l, r), routes, take_drop(T.Route, routes, half))))
 
 law check_valid:
   for +inst: T.Instance
@@ -288,12 +292,13 @@ law check_valid:
 def check_valid(inst, plan):
   +routes = T.Plan.routes(plan)
   +crews = T.Instance.crews(inst)
+  +times = T.Instance.times(inst)
   +cap = T.Instance.cap(inst)
   +size = List.length(&2, T.Route, routes)
   +io = P.Instance.ok(inst)
   +pt = P.Plan.partition_ok(inst, plan)
   +st = P.Slots.sorted(P.Routes.slots(routes))
-  Equal.cong(Bool, Bool, b => Bool.and(io, Bool.and(pt, Bool.and(st, b))), P.Routes.ok_par(5n, size, routes, crews, cap), P.Routes.ok(routes, crews, cap), ok_par(5n, size, routes, crews, cap))
+  Equal.cong(Bool, Bool, b => Bool.and(io, Bool.and(pt, Bool.and(st, b))), P.Routes.ok_par(5n, size, routes, crews, times, cap), P.Routes.ok(routes, crews, times, cap), ok_par(5n, size, routes, crews, times, cap))
 
 # The fallback
 # ------------
@@ -407,7 +412,7 @@ def improve_score(fuel, inst, plan):
     case 0n:
       L.le_refl(S.score(plan))
     case 1n+f:
-      +next = S.pass(T.Instance.cap(inst), plan)
+      +next = S.pass(T.Instance.times(inst), T.Instance.cap(inst), plan)
       +c = S.accepts(inst, plan, next)
       +p2 = S.keep_better(c, plan, next)
       L.le_trans(S.score(S.improve(f, inst, p2)), S.score(p2), S.score(plan),
@@ -425,7 +430,7 @@ def improve_valid(fuel, inst, plan, ev):
     case 0n:
       ev
     case 1n+f:
-      +next = S.pass(T.Instance.cap(inst), plan)
+      +next = S.pass(T.Instance.times(inst), T.Instance.cap(inst), plan)
       +c = S.accepts(inst, plan, next)
       improve_valid(f, inst, S.keep_better(c, plan, next), keep_valid(c, inst, plan, next, {==}, ev))
 
@@ -464,72 +469,76 @@ def make_some(c, r, at, added, x, e):
     case False{}:
       Empty.absurd({False{} == True{} : Bool}, none_cand(x, e))
 
-def Added(+r: T.Route, +job: T.Appraisal) -> Nat:
-  S.Spot.added(S.Select.spot(r, T.Appraisal.site(job)))
+def Added(+times: T.Times, +r: T.Route, +job: T.Appraisal) -> Nat:
+  S.Spot.added(S.Select.spot(times, r, T.Appraisal.site(job)))
 
-def Fits(+r: T.Route, +job: T.Appraisal) -> Bool:
-  S.Select.fits(r, job, Added(r, job))
+def Fits(+times: T.Times, +r: T.Route, +job: T.Appraisal) -> Bool:
+  S.Select.fits(r, job, Added(times, r, job))
 
 law in_fits:
+  for +times: T.Times
   for +c: Bool
   for +r: T.Route
   for +job: T.Appraisal
   for +x: S.Cand
-  for +e: {S.Select.in(c, r, job) == Some{x} : MC()}
-  {Fits(r, job) == True{} : Bool}
+  for +e: {S.Select.in(times, c, r, job) == Some{x} : MC()}
+  {Fits(times, r, job) == True{} : Bool}
 
-def in_fits(c, r, job, x, e):
+def in_fits(times, c, r, job, x, e):
   match c:
     case False{}:
-      Empty.absurd({Fits(r, job) == True{} : Bool}, none_cand(x, e))
+      Empty.absurd({Fits(times, r, job) == True{} : Bool}, none_cand(x, e))
     case True{}:
-      +s = S.Select.spot(r, T.Appraisal.site(job))
-      make_some(Fits(r, job), r, S.Spot.at(s), S.Spot.added(s), x, e)
+      +s = S.Select.spot(times, r, T.Appraisal.site(job))
+      make_some(Fits(times, r, job), r, S.Spot.at(s), S.Spot.added(s), x, e)
 
 law out_fits:
   for +c: Bool
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
   for +job: T.Appraisal
   for +x: S.Cand
-  for +e: {S.Select.out(c, cap, r, job) == Some{x} : MC()}
-  {Fits(r, job) == True{} : Bool}
+  for +e: {S.Select.out(c, times, cap, r, job) == Some{x} : MC()}
+  {Fits(times, r, job) == True{} : Bool}
 
-def out_fits(c, cap, r, job, x, e):
+def out_fits(c, times, cap, r, job, x, e):
   match c:
     case True{}:
-      Empty.absurd({Fits(r, job) == True{} : Bool}, none_cand(x, e))
+      Empty.absurd({Fits(times, r, job) == True{} : Bool}, none_cand(x, e))
     case False{}:
-      +s = S.Select.spot(r, T.Appraisal.site(job))
-      +w = S.Select.within_cap(cap, r, job, S.Spot.at(s))
-      L.and_l(Fits(r, job), w, make_some(Bool.and(Fits(r, job), w), r, S.Spot.at(s), S.Spot.added(s), x, e))
+      +s = S.Select.spot(times, r, T.Appraisal.site(job))
+      +w = S.Select.within_cap(times, cap, r, job, S.Spot.at(s))
+      L.and_l(Fits(times, r, job), w, make_some(Bool.and(Fits(times, r, job), w), r, S.Spot.at(s), S.Spot.added(s), x, e))
 
 law one_fits:
+  for +times: T.Times
   for +cap: Nat
   for +job: T.Appraisal
   for +outside: Bool
   for +r: T.Route
   for +inzip: Bool
   for +x: S.Cand
-  for +e: {S.Select.one.go(cap, job, outside, r, inzip) == Some{x} : MC()}
-  {Fits(r, job) == True{} : Bool}
+  for +e: {S.Select.one.go(times, cap, job, outside, r, inzip) == Some{x} : MC()}
+  {Fits(times, r, job) == True{} : Bool}
 
-def one_fits(cap, job, outside, r, inzip, x, e):
+def one_fits(times, cap, job, outside, r, inzip, x, e):
   match outside:
     case False{}:
-      in_fits(inzip, r, job, x, e)
+      in_fits(times, inzip, r, job, x, e)
     case True{}:
-      out_fits(inzip, cap, r, job, x, e)
+      out_fits(inzip, times, cap, r, job, x, e)
 
 law in_zip:
+  for +times: T.Times
   for +c: Bool
   for +r: T.Route
   for +job: T.Appraisal
   for +x: S.Cand
-  for +e: {S.Select.in(c, r, job) == Some{x} : MC()}
+  for +e: {S.Select.in(times, c, r, job) == Some{x} : MC()}
   {c == True{} : Bool}
 
-def in_zip(c, r, job, x, e):
+def in_zip(times, c, r, job, x, e):
   match c:
     case False{}:
       Empty.absurd({False{} == True{} : Bool}, none_cand(x, e))
@@ -549,16 +558,17 @@ def wait_tree(w, job):
 law rescue_stays:
   for +c: Bool
   for +d: Nat
+  for +times: T.Times
   for +cap: Nat
   for +w: S.Work
   for +job: T.Appraisal
   for +later: {c == False{} : Bool}
-  {S.Work.tree(S.place.rescue(c, d, cap, w, job)) == S.Work.tree(w) : S.Forest}
+  {S.Work.tree(S.place.rescue(c, d, times, cap, w, job)) == S.Work.tree(w) : S.Forest}
 
-def rescue_stays(c, d, cap, w, job, later):
+def rescue_stays(c, d, times, cap, w, job, later):
   match c:
     case True{}:
-      L.never({S.Work.tree(S.place.outside(S.Select.tree(S.Work.tree(w), d, cap, job, True{}), cap, w, job)) == S.Work.tree(w) : S.Forest}, Equal.sym(Bool, True{}, False{}, later))
+      L.never({S.Work.tree(S.place.outside(S.Select.tree(S.Work.tree(w), d, times, cap, job, True{}), times, cap, w, job)) == S.Work.tree(w) : S.Forest}, Equal.sym(Bool, True{}, False{}, later))
     case False{}:
       wait_tree(w, job)
 
@@ -568,32 +578,35 @@ def Open(+r: T.Route) -> Bool:
 def Due(+r: T.Route, +job: T.Appraisal) -> Bool:
   Nat.is_le(T.Route.day(r), T.Appraisal.due(job))
 
-def Hours(+r: T.Route, +job: T.Appraisal) -> Bool:
-  Nat.is_le(Nat.add(Nat.add(T.Audit.minutes(T.Route.audit(r)), Added(r, job)), T.Appraisal.minutes(job)), T.Contractor.max_minutes(T.Route.crew(r)))
+def Hours(+times: T.Times, +r: T.Route, +job: T.Appraisal) -> Bool:
+  Nat.is_le(Nat.add(Nat.add(T.Audit.minutes(T.Route.audit(r)), Added(times, r, job)), T.Appraisal.minutes(job)), T.Contractor.max_minutes(T.Route.crew(r)))
 
 law fits_open:
+  for +times: T.Times
   for +r: T.Route
   for +job: T.Appraisal
-  for +e: {Fits(r, job) == True{} : Bool}
+  for +e: {Fits(times, r, job) == True{} : Bool}
   {T.Route.closed(r) == False{} : Bool}
 
-def fits_open(r, job, e):
-  L.not_t(T.Route.closed(r), L.and_l(Open(r), Bool.and(Due(r, job), Hours(r, job)), e))
+def fits_open(times, r, job, e):
+  L.not_t(T.Route.closed(r), L.and_l(Open(r), Bool.and(Due(r, job), Hours(times, r, job)), e))
 
 law fits_due:
+  for +times: T.Times
   for +r: T.Route
   for +job: T.Appraisal
-  for +e: {Fits(r, job) == True{} : Bool}
+  for +e: {Fits(times, r, job) == True{} : Bool}
   {Due(r, job) == True{} : Bool}
 
-def fits_due(r, job, e):
-  L.and_l(Due(r, job), Hours(r, job), L.and_r(Open(r), Bool.and(Due(r, job), Hours(r, job)), e))
+def fits_due(times, r, job, e):
+  L.and_l(Due(r, job), Hours(times, r, job), L.and_r(Open(r), Bool.and(Due(r, job), Hours(times, r, job)), e))
 
 law fits_hours:
+  for +times: T.Times
   for +r: T.Route
   for +job: T.Appraisal
-  for +e: {Fits(r, job) == True{} : Bool}
-  {Hours(r, job) == True{} : Bool}
+  for +e: {Fits(times, r, job) == True{} : Bool}
+  {Hours(times, r, job) == True{} : Bool}
 
-def fits_hours(r, job, e):
-  L.and_r(Due(r, job), Hours(r, job), L.and_r(Open(r), Bool.and(Due(r, job), Hours(r, job)), e))
+def fits_hours(times, r, job, e):
+  L.and_r(Due(r, job), Hours(times, r, job), L.and_r(Open(r), Bool.and(Due(r, job), Hours(times, r, job)), e))

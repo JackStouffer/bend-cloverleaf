@@ -60,22 +60,23 @@ def none_is_not_some(a, e):
 law fine_at:
   for +routes: RL()
   for +crews: Crews()
+  for +times: T.Times
   for +cap: Nat
   for +n: Nat
   for +r: T.Route
-  for +er: {P.Routes.ok(routes, crews, cap) == True{} : Bool}
+  for +er: {P.Routes.ok(routes, crews, times, cap) == True{} : Bool}
   for +at: At(routes, n, r)
-  {P.Route.fine(crews, cap, r) == True{} : Bool}
+  {P.Route.fine(crews, times, cap, r) == True{} : Bool}
 
-def fine_at(routes, crews, cap, n, r, er, at):
+def fine_at(routes, crews, times, cap, n, r, er, at):
   match routes n:
     case Nil{} _:
-      Empty.absurd({P.Route.fine(crews, cap, r) == True{} : Bool}, none_is_not_some(r, at))
+      Empty.absurd({P.Route.fine(crews, times, cap, r) == True{} : Bool}, none_is_not_some(r, at))
     case +h <> +t 0n:
-      %some_route(h, r, at) : {P.Route.fine(crews, cap, _) == True{} : Bool}
-      PP.routes_head(h, t, crews, cap, er)
+      %some_route(h, r, at) : {P.Route.fine(crews, times, cap, _) == True{} : Bool}
+      PP.routes_head(h, t, crews, times, cap, er)
     case +h <> +t 1n+p:
-      fine_at(t, crews, cap, p, r, PP.routes_tail(h, t, crews, cap, er), at)
+      fine_at(t, crews, times, cap, p, r, PP.routes_tail(h, t, crews, times, cap, er), at)
 
 law fine_valid:
   for +inst: T.Instance
@@ -84,10 +85,10 @@ law fine_valid:
   for +r: T.Route
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
   for +at: At(T.Plan.routes(plan), n, r)
-  {P.Route.fine(T.Instance.crews(inst), T.Instance.cap(inst), r) == True{} : Bool}
+  {P.Route.fine(T.Instance.crews(inst), T.Instance.times(inst), T.Instance.cap(inst), r) == True{} : Bool}
 
 def fine_valid(inst, plan, n, r, ev, at):
-  fine_at(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.cap(inst), n, r, PP.v_routes(inst, plan, ev), at)
+  fine_at(T.Plan.routes(plan), T.Instance.crews(inst), T.Instance.times(inst), T.Instance.cap(inst), n, r, PP.v_routes(inst, plan, ev), at)
 
 law ok_valid:
   for +inst: T.Instance
@@ -96,10 +97,10 @@ law ok_valid:
   for +r: T.Route
   for +ev: {P.Plan.valid(inst, plan) == True{} : Bool}
   for +at: At(T.Plan.routes(plan), n, r)
-  {R.Route.ok(T.Instance.cap(inst), r) == True{} : Bool}
+  {R.Route.ok(T.Instance.times(inst), T.Instance.cap(inst), r) == True{} : Bool}
 
 def ok_valid(inst, plan, n, r, ev, at):
-  PP.ok_of_fine(T.Instance.crews(inst), T.Instance.cap(inst), r, fine_valid(inst, plan, n, r, ev, at))
+  PP.ok_of_fine(T.Instance.crews(inst), T.Instance.times(inst), T.Instance.cap(inst), r, fine_valid(inst, plan, n, r, ev, at))
 
 # Audits
 # ------
@@ -159,33 +160,35 @@ def audit_of(a, b, e):
         L.nats_of(l1, l2, L.and_l(T.Nats.is_eq(l1, l2), T.Nats.is_eq(u1, u2), s4)),
         L.nats_of(u1, u2, L.and_r(T.Nats.is_eq(l1, l2), T.Nats.is_eq(u1, u2), s4)))
 
-def Truth(+r: T.Route) -> T.Audit:
-  R.Audit.of(T.Route.crew(r), T.Route.day(r), T.Route.stops(r))
+def Truth(+times: T.Times, +r: T.Route) -> T.Audit:
+  R.Audit.of(times, T.Route.crew(r), T.Route.day(r), T.Route.stops(r))
 
 # A route that passes publishes the true audit.
 law audit_true:
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
-  for +e: {R.Route.ok(cap, r) == True{} : Bool}
-  {T.Route.audit(r) == Truth(r) : T.Audit}
+  for +e: {R.Route.ok(times, cap, r) == True{} : Bool}
+  {T.Route.audit(r) == Truth(times, r) : T.Audit}
 
-def audit_true(cap, r, e):
+def audit_true(times, cap, r, e):
   match r:
     case T.Route{c, d, s, k, a}:
-      +t = R.Audit.of(c, d, s)
+      +t = R.Audit.of(times, c, d, s)
       audit_of(a, t, L.and_l(T.Audit.is_eq(a, t), Nat.is_le(T.Audit.extra(a), cap),
         L.and_r(R.Stops.all_open(R.Stops.tail(s)), Bool.and(T.Audit.is_eq(a, t), Nat.is_le(T.Audit.extra(a), cap)), e)))
 
 law extra_true:
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
-  for +e: {R.Route.ok(cap, r) == True{} : Bool}
-  {Nat.is_le(R.Route.extra(T.Route.crew(r), T.Route.stops(r)), cap) == True{} : Bool}
+  for +e: {R.Route.ok(times, cap, r) == True{} : Bool}
+  {Nat.is_le(R.Route.extra(times, T.Route.crew(r), T.Route.stops(r)), cap) == True{} : Bool}
 
-def extra_true(cap, r, e):
+def extra_true(times, cap, r, e):
   match r:
     case T.Route{c, d, s, k, a}:
-      +t = R.Audit.of(c, d, s)
+      +t = R.Audit.of(times, c, d, s)
       +inner = Bool.and(T.Audit.is_eq(a, t), Nat.is_le(T.Audit.extra(a), cap))
       +rest = L.and_r(R.Stops.all_open(R.Stops.tail(s)), inner, e)
       +le = L.and_r(T.Audit.is_eq(a, t), Nat.is_le(T.Audit.extra(a), cap), rest)
@@ -194,13 +197,14 @@ def extra_true(cap, r, e):
       le
 
 law open_tail:
+  for +times: T.Times
   for +cap: Nat
   for +r: T.Route
-  for +e: {R.Route.ok(cap, r) == True{} : Bool}
+  for +e: {R.Route.ok(times, cap, r) == True{} : Bool}
   {R.Stops.all_open(R.Stops.tail(T.Route.stops(r))) == True{} : Bool}
 
-def open_tail(cap, r, e):
-  PH.open_t(cap, r, e)
+def open_tail(times, cap, r, e):
+  PH.open_t(times, cap, r, e)
 
 # Listed stops
 # ------------
@@ -705,7 +709,7 @@ def stays_in_state(inst, plan, n, r, k, s, ev, on, at):
     PJ.state_of_count(a, jobs, st, PP.ok_jobs(inst, ok), ec),
     Equal.sym(Nat, T.Contractor.state(crew), st,
       crew_state(crews, crew, st, PP.ok_crews(inst, ok),
-        L.and_l(P.Crews.has(crews, crew), R.Route.ok(T.Instance.cap(inst), r), fine_valid(inst, plan, n, r, ev, on)))))
+        L.and_l(P.Crews.has(crews, crew), R.Route.ok(T.Instance.times(inst), T.Instance.cap(inst), r), fine_valid(inst, plan, n, r, ev, on)))))
 
 # Loops
 # -----
