@@ -3,6 +3,6 @@
 FROM node:24-alpine
 
 WORKDIR /app
-COPY fetch-road-data.mjs road-build.mjs check-road-data.mjs ./
+COPY fetch-road-data.mjs road-build.mjs road-turns.mjs check-road-data.mjs rebuild-road-data.mjs OSRM-LICENSE.txt ./
 USER node
-CMD ["sh", "-c", "node fetch-road-data.mjs /data/osm && node road-build.mjs /data/osm/us-latest.osm.pbf /data/osm/outlines /data/road && node check-road-data.mjs /data/road"]
+CMD ["node", "rebuild-road-data.mjs", "/data"]

@@ -1,0 +1,7 @@
+# The backend images build from the repo root, but need only these.
+*
+!backend/
+!scripts/
+!data/road/
+backend/build/
+scripts/*.test.mjs

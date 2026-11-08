@@ -5,9 +5,11 @@ name: cloverleaf
 # The stack has to fit in 8GB.
 services:
   web:
-    image: cloverleaf-backend
+    image: cloverleaf-web
     build:
-      context: backend
+      context: .
+      dockerfile: backend/Dockerfile
+      target: web
     init: true
     restart: unless-stopped
     mem_limit: 512m
@@ -46,22 +48,30 @@ services:
       web:
         condition: service_healthy
 
-  # Batch lookups, one state per run: docker compose run --rm road matrix ...
-  # A run gets its own process because Bend's heap never shrinks.
+  # Batch lookups, one state per run, against the road data in the image:
+  #   docker compose run --rm road matrix /road/texas points.bin out.bin 36000 0
+  # A run gets its own process because Bend's heap never shrinks. Local runs copy
+  # the cached data/road into the image. A deployed image leaves ROAD_DATA at its
+  # default, which rebuilds the data from scratch.
   road:
-    image: cloverleaf-backend
+    image: cloverleaf-road
     build:
-      context: backend
+      context: .
+      dockerfile: backend/Dockerfile
+      target: road
+      args:
+        ROAD_DATA: local
     profiles:
       - road
     init: true
+    # Runs as the host user, so that jobs can write their results to ./data/jobs.
+    user: "${UID:-1000}:${GID:-1000}"
     mem_limit: 1g
     memswap_limit: 1g
-    entrypoint: [road, +RTS, --threads, "6", -RTS]
     volumes:
-      - ./data:/data
+      - ./data/jobs:/jobs
 
-  # Fetches the US extract and builds the state road records in ./data. It only
+  # Refreshes the cached road data in ./data/road that local images copy. It only
   # runs when asked: docker compose run --rm road-build
   road-build:
     build:

@@ -1,3 +1,14 @@
+# Builds from the repo root, for the backend's two images:
+#
+#   docker build -f backend/Dockerfile --target road .   # road process and data
+#   docker build -f backend/Dockerfile --target web .    # web process
+#
+# The road image carries every state's road data. By default the build fetches
+# the US extract and rebuilds the data from scratch, which is what a deployed
+# image ships. ROAD_DATA=local copies the cached data/road instead, which is
+# what local Compose runs use. scripts/road-build.mjs defines the data format.
+ARG ROAD_DATA=fresh
+
 # Bend releases are x64 or arm64. This digest pins the linux-x64 build.
 FROM ubuntu:24.04 AS build
 
@@ -15,7 +26,7 @@ RUN apt-get update \
 ENV PATH="/opt/bend/bin:${PATH}" BEND_HOME=/opt/bend BEND_NO_TELEMETRY=1
 
 WORKDIR /src
-COPY . .
+COPY backend/ .
 RUN bend PROOF.bend \
   && bend web/main.bend --check-only \
   && bend road/main.bend --check-only \
@@ -25,11 +36,32 @@ RUN bend PROOF.bend \
   && bend web/main.bend -o /out/web \
   && bend road/main.bend -o /out/road
 
-FROM ubuntu:24.04
+# Road data rebuilt from OpenStreetMap. The 12GB download is deleted in the same
+# step, so only the result reaches a layer.
+FROM node:24-alpine AS road-data-fresh
+WORKDIR /app
+COPY scripts/fetch-road-data.mjs scripts/road-build.mjs scripts/road-turns.mjs scripts/check-road-data.mjs scripts/rebuild-road-data.mjs scripts/OSRM-LICENSE.txt ./
+RUN node rebuild-road-data.mjs /data && rm -rf /data/osm
 
+# The road data already built in data/road.
+FROM scratch AS road-data-local
+COPY data/road /data/road
+
+FROM road-data-${ROAD_DATA} AS road-data
+
+FROM ubuntu:24.04 AS runtime
 RUN useradd --system --no-create-home cloverleaf
-COPY --from=build /out/web /usr/local/bin/web
+
+# Batch lookups against /road/<state>. Jobs read and write files in /jobs.
+FROM runtime AS road
 COPY --from=build /out/road /usr/local/bin/road
+COPY --from=road-data /data/road /road
+USER cloverleaf
+WORKDIR /jobs
+ENTRYPOINT ["road", "+RTS", "--threads", "6", "-RTS"]
+
+FROM runtime AS web
+COPY --from=build /out/web /usr/local/bin/web
 USER cloverleaf
 EXPOSE 8080
 CMD ["web", "+RTS", "--threads", "2", "-RTS"]
