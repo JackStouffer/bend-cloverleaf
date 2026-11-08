@@ -5,7 +5,7 @@
 // never shrinks and has no limit.
 //
 //   node scripts/nightly.mjs matrices <synth folder> <road data folder> <road binary> [limit] [depth]
-//   node scripts/nightly.mjs solve <synth folder> <solver binary> <threads> [plan folder]
+//   node scripts/nightly.mjs solve <synth folder> <solver binary> <threads> [planner] [forks]
 //
 // matrices writes matrix.bin beside each state's points.bin, at the deepest
 // lane depth up to `depth` that the road process accepts for that state, and
@@ -72,12 +72,15 @@ function matrices(synthDir, roadDir, roadBin, limit = "36000", depth = "3") {
   console.log(`all matrices in ${(total / 1000).toFixed(1)}s`);
 }
 
-function solve(synthDir, solverBin, threads, planDir = path.join(synthDir, "plans")) {
-  fs.mkdirSync(planDir, { recursive: true });
-  const r = run(CAPS.solver, solverBin, ["+RTS", "--threads", threads, "-RTS", "national", synthDir, planDir]);
+// Each state's plan is written beside its inputs, as plan-<planner>.bin.
+function solve(synthDir, solverBin, threads, planner = "planner", forks = "4") {
+  const summary = JSON.parse(fs.readFileSync(path.join(synthDir, "summary.json"), "utf8"));
+  const { limit } = JSON.parse(fs.readFileSync(path.join(synthDir, "matrices.json"), "utf8"));
+  const states = summary.states.map((s) => s.state);
+  const r = run(CAPS.solver, solverBin, ["+RTS", "--threads", threads, "-RTS", "national", synthDir, planner, String(limit), forks, ...states]);
   process.stdout.write(r.out);
   if (r.status !== 0) throw new Error(`solver exited ${r.status}`);
-  console.log(`solve took ${(r.ms / 1000).toFixed(1)}s on ${threads} threads`);
+  console.log(`the solver process took ${(r.ms / 1000).toFixed(1)}s on ${threads} threads`);
 }
 
 const [command, ...args] = process.argv.slice(2);
@@ -85,7 +88,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (command === "matrices" && args.length >= 3) matrices(...args);
   else if (command === "solve" && args.length >= 3) solve(...args);
   else {
-    console.error("usage: node scripts/nightly.mjs matrices <synth folder> <road data folder> <road binary> [limit] [depth]\n       node scripts/nightly.mjs solve <synth folder> <solver binary> <threads> [plan folder]");
+    console.error("usage: node scripts/nightly.mjs matrices <synth folder> <road data folder> <road binary> [limit] [depth]\n       node scripts/nightly.mjs solve <synth folder> <solver binary> <threads> [planner] [forks]");
     process.exit(2);
   }
 }

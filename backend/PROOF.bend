@@ -136,7 +136,8 @@ def Laws.published_plan_is_valid(inst, plan, e):
   PS.publish_valid(inst, plan, e)
 
 def Laws.solved_plan_is_valid(tune, inst, first, last, e):
-  PS.publish_valid(inst, S.improve(S.Tuning.passes(tune), inst, S.plan(tune, inst, first, last)), e)
+  +passes = S.Tuning.passes(tune)
+  PS.publish_valid(inst, S.improve(passes, inst, S.retry(tune, inst, S.improve(passes, inst, S.plan(tune, inst, first, last)), last)), e)
 
 def Laws.candidate_route_is_open(times, cap, job, outside, r, c, e):
   PS.fits_open(times, r, job, PS.one_fits(times, cap, job, outside, r, R.Nats.has(T.Contractor.zips(T.Route.crew(r)), T.Appraisal.zip(job)), c, e))

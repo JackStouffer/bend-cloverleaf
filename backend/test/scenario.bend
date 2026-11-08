@@ -11,6 +11,8 @@ import ../core/times.bend as Tm
 import ../core/nation.bend as N
 import ../solver/synth.bend as Syn
 import ../solver/load.bend as Ld
+import ../solver/baseline.bend as B
+import ../solver/report.bend as Rp
 import ../road/graph.bend as RG
 import ../road/search.bend as RS
 import ../road/path.bend as RP
@@ -626,6 +628,54 @@ def nation_checks() -> List<&2, Check>:
    Check{"work counts jobs times routes", Nat.is_eq(N.State.work(bench()), Nat.add(1n, Nat.mul(400n, 40n)))},
    Check{"the split leaves the biggest state alone", Nat.is_eq(N.States.split_at(nation(), Nat.div(N.States.work(nation()), 2n), 0n), 5n)}]
 
+# Baselines and reports
+# ---------------------
+
+# Two crews at the same home, both covering zip 100. First fit loads crew 1's
+# first day before anything else; the planner spreads the work.
+def base.inst() -> T.Instance:
+  T.Instance{[crew(1n, [100n], 480n), crew(2n, [100n], 480n)],
+    [job(1n, 100n, 100n, 11n), job(2n, 200n, 100n, 11n), job(3n, 300n, 100n, 11n), job(4n, 400n, 100n, 11n)], 60n, ny(), Tm.none()}
+
+def base.first() -> T.Plan:
+  B.first_fit(base.inst(), 10n, 12n)
+
+def base.near() -> T.Plan:
+  B.nearest(base.inst(), 10n, 12n)
+
+# Crew 1 lives far from the work, crew 2 next to it.
+def near.inst() -> T.Instance:
+  T.Instance{[T.Contractor{1n, near_nyc(9000n), [100n], 480n, [10n], ny()}, crew(2n, [100n], 480n)], [job(1n, 100n, 100n, 10n)], 60n, ny(), Tm.none()}
+
+def route.on(routes: List<&2, T.Route>, +c: Nat, +d: Nat) -> Nat:
+  match routes:
+    case Nil{}:
+      0n
+    case +r <> t:
+      Nat.add(Bool.pick(Nat, H.Route.at(r, c, d), List.length(&2, T.Stop, T.Route.stops(r)), 0n), route.on(t, c, d))
+
+def stats(+inst: T.Instance, +plan: T.Plan) -> Rp.Stats:
+  Rp.of(inst, plan, 10n, 12n)
+
+def base_checks() -> List<&2, Check>:
+  [Check{"the first-fit baseline is valid", P.Plan.valid(base.inst(), base.first())},
+   Check{"the first-fit baseline places every job", Nat.is_eq(count_routes(T.Plan.routes(base.first())), 4n)},
+   Check{"first fit fills the first route before the next", Nat.is_eq(route.on(T.Plan.routes(base.first()), 1n, 10n), 4n)},
+   Check{"the nearest baseline is valid", P.Plan.valid(near.inst(), B.nearest(near.inst(), 10n, 11n))},
+   Check{"the nearest baseline picks the nearest contractor", Nat.is_eq(route.on(T.Plan.routes(B.nearest(near.inst(), 10n, 11n)), 2n, 10n), 1n)},
+   Check{"a baseline never leaves its zips", Nat.is_eq(total_outside(T.Plan.routes(B.first_fit(outside_inst(), 10n, 12n))), 0n)},
+   Check{"so urgent work it can't reach is an exception", Nat.is_eq(exceptions(B.first_fit(outside_inst(), 10n, 12n)), 1n)},
+   Check{"a report counts placed jobs", Nat.is_eq(Rp.Stats.placed(stats(base.inst(), base.first())), 4n)},
+   Check{"a report adds up drive time", Nat.is_eq(Rp.Stats.drive(stats(road_inst(200n), road_plan(200n))), 400n)},
+   Check{"a report finds the longest day", Nat.is_eq(Rp.Stats.peak(stats(road_inst(200n), road_plan(200n))), 420n)},
+   Check{"a missed job that couldn't fit isn't counted as feasible", Nat.is_eq(Rp.Stats.feasible(stats(too_far_inst(), S.solve(tune(), too_far_inst(), 10n, 12n))), 0n)},
+   Check{"a missed job that could have fit is counted", Nat.is_eq(Rp.Stats.feasible(stats(outside_inst(), B.first_fit(outside_inst(), 10n, 12n))), 1n)},
+   Check{"a report counts every contractor with routes", Nat.is_eq(Rp.Stats.crews(stats(base.inst(), base.first())), 2n)},
+   Check{"a report finds the busiest contractor's week", Nat.is_eq(Rp.Stats.wpeak(stats(road_inst(200n), road_plan(200n))), 420n)},
+   Check{"a job no empty route can take counts as impossible", Nat.is_eq(Rp.Stats.impossible(stats(too_far_inst(), S.solve(tune(), too_far_inst(), 10n, 12n))), 1n)},
+   Check{"a job an empty route could take isn't impossible", Nat.is_eq(Rp.Stats.impossible(stats(outside_inst(), B.first_fit(outside_inst(), 10n, 12n))), 0n)},
+   Check{"the planner misses nothing that fits", Nat.is_eq(Rp.Stats.feasible(stats(bench(), bench_plan())), 0n)}]
+
 # Loading files
 # -------------
 
@@ -718,5 +768,5 @@ def finish(n: Nat) -> IO(Unit):
       IO.die(Unit, 1, Nat.show(n) ++ " scenarios failed")
 
 def main() -> IO(Unit):
-  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, load_checks(), List.append(&2, Check, nation_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), road_checks()))))))
+  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, load_checks(), List.append(&2, Check, nation_checks(), List.append(&2, Check, base_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), road_checks())))))))
   IO.bind(Unit, Unit, print_all(all), u => finish(failed(all)))

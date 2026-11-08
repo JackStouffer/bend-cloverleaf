@@ -211,3 +211,21 @@ def Mx.times(m: Mx, +limit: Nat) -> T.Times:
   match m:
     case Mx{_, _, _, _, cells, _, _}:
       Tm.of.cells(Nat.add(Nat.div(limit, 600n), 1n), cells)
+
+def Homes.points(cs: List<&2, T.Contractor>, rest: List<&2, T.Point>) -> List<&2, T.Point>:
+  match cs:
+    case Nil{}:
+      rest
+    case c <> t:
+      T.Contractor.home(c) <> Homes.points(t, rest)
+
+def Sites.points(js: List<&2, T.Appraisal>) -> List<&2, T.Point>:
+  match js:
+    case Nil{}:
+      Nil{}
+    case j <> t:
+      T.Appraisal.site(j) <> Sites.points(t)
+
+# The points themselves, in the same order as keys.
+def points(+inst: T.Instance) -> List<&2, T.Point>:
+  Homes.points(T.Instance.crews(inst), Sites.points(T.Instance.jobs(inst)))

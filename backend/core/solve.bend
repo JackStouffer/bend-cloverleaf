@@ -596,5 +596,24 @@ def plan(+tune: Tuning, +inst: T.Instance, +first: Nat, +last: Nat) -> T.Plan:
   +jobs = List.sort(~T.Appraisal, ~by_due, T.Instance.jobs(inst))
   Work.plan(assign(jobs, Tuning.lanes(tune), T.Instance.times(inst), T.Instance.cap(inst), last, Work{tree, Nil{}, Nil{}}))
 
+def Exceptions.jobs(xs: List<&2, T.Exception>) -> List<&2, T.Appraisal>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case e <> t:
+      T.Exception.job(e) <> Exceptions.jobs(t)
+
+# Polishing shortens routes, so work turned away the first time can fit after
+# it. This offers everything left over to the polished routes again, tightest
+# deadline first, on the same rules as the first pass.
+def retry(+tune: Tuning, +inst: T.Instance, +plan: T.Plan, +last: Nat) -> T.Plan:
+  +routes = T.Plan.routes(plan)
+  +tree = Forest.of(Tuning.depth(tune), List.length(&2, T.Route, routes), routes)
+  +left = List.append(&2, T.Appraisal, Exceptions.jobs(T.Plan.exceptions(plan)), T.Plan.backlog(plan))
+  +jobs = List.sort(~T.Appraisal, ~by_due, left)
+  Work.plan(assign(jobs, Tuning.lanes(tune), T.Instance.times(inst), T.Instance.cap(inst), last, Work{tree, Nil{}, Nil{}}))
+
+# Assign, polish, offer what's left again, polish again, then publish.
 def solve(+tune: Tuning, +inst: T.Instance, +first: Nat, +last: Nat) -> T.Plan:
-  publish(inst, improve(Tuning.passes(tune), inst, plan(tune, inst, first, last)))
+  +passes = Tuning.passes(tune)
+  publish(inst, improve(passes, inst, retry(tune, inst, improve(passes, inst, plan(tune, inst, first, last)), last)))
