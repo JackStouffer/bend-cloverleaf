@@ -1,6 +1,7 @@
-# Builds from the repo root, for the backend's two images:
+# Builds from the repo root, for the backend's three images:
 #
 #   docker build -f backend/Dockerfile --target road .   # road process and data
+#   docker build -f backend/Dockerfile --target solver . # solver process
 #   docker build -f backend/Dockerfile --target web .    # web process
 #
 # The road image carries every state's road data. By default the build fetches
@@ -30,11 +31,13 @@ COPY backend/ .
 RUN bend PROOF.bend \
   && bend web/main.bend --check-only \
   && bend road/main.bend --check-only \
+  && bend solver/main.bend --check-only \
   && mkdir -p /out \
   && bend test/scenario.bend -o /out/scenario \
   && /out/scenario \
   && bend web/main.bend -o /out/web \
-  && bend road/main.bend -o /out/road
+  && bend road/main.bend -o /out/road \
+  && bend solver/main.bend -o /out/solver
 
 # Road data rebuilt from OpenStreetMap. The 12GB download is deleted in the same
 # step, so only the result reaches a layer.
@@ -59,6 +62,14 @@ COPY --from=road-data /data/road /road
 USER cloverleaf
 WORKDIR /jobs
 ENTRYPOINT ["road", "+RTS", "--threads", "6", "-RTS"]
+
+# The nightly solve, one run per night. It reads each state's instance.bin and
+# matrix.bin from /jobs and writes each plan beside them.
+FROM runtime AS solver
+COPY --from=build /out/solver /usr/local/bin/solver
+USER cloverleaf
+WORKDIR /jobs
+ENTRYPOINT ["solver", "+RTS", "--threads", "6", "-RTS"]
 
 FROM runtime AS web
 COPY --from=build /out/web /usr/local/bin/web

@@ -37,6 +37,12 @@ node scripts/compare-osrm.mjs compare points.bin matrix.bin 36000 http://127.0.0
 docker compose run --rm road-build                       # the same rebuild in Compose
 docker compose --profile road run --rm road bench /road/texas 100 36000 0  # the road image, with the cached data baked in
 docker build -f backend/Dockerfile --target road .       # a deployable road image, rebuilding the data from scratch
+node scripts/synth.mjs data/road data/osm/outlines data/synth 1000 10000 20000  # a national synthetic instance, per state
+node scripts/nightly.mjs matrices data/synth data/road backend/build/road  # every state's road matrix, each in its own capped process
+node scripts/nightly.mjs solve data/synth backend/build/solver 12 planner  # the national solve; planner, first_fit or nearest
+docker compose --profile solver run --rm solver national /jobs/synth planner 36000 4 <state>...  # the same solve in Compose, inputs in data/jobs
+docker build -t cloverleaf-ortools scripts/bench/ortools  # the OR-Tools comparison, benchmark only
+docker run --rm -m 2g --memory-swap 2g -v "$PWD/data/synth:/synth:ro" cloverleaf-ortools /synth/georgia 120  # needs times.bin and plan-planner.bin
 ```
 
 Run these from `backend/`, and write build output to `backend/build/`:
@@ -51,7 +57,8 @@ bend file.bend -o file.mjs            # build an ES module of non-IO defs for th
 bend base Map                         # look up a name in Base
 bend test/scenario.bend -o build/scenario && ./build/scenario        # concrete scenarios
 bend solver/main.bend -o build/solver                                # build the benchmark
-./build/solver +RTS --threads 4 -RTS 1000 10000 7                    # crews, jobs, days
+./build/solver +RTS --threads 4 -RTS 1000 10000 7                    # straight-line benchmark: crews, jobs, days
+./build/solver times ../data/synth georgia 36000                     # dense minutes for one state, for the OR-Tools comparison
 bend road/main.bend -o build/road                                    # build the road process
 ./build/road +RTS --threads 12 -RTS bench ../data/road/texas 100 36000 2                     # searches, limit, lane depth
 ./build/road +RTS --threads 12 -RTS matrix ../data/road/texas points.bin matrix.bin 36000 2  # points, output, limit, lane depth
@@ -82,7 +89,7 @@ npm run gen:api                       # regenerate openapi.json and the typed cl
 - Keep local setup matching a real deployment. Don't add dev-only shortcuts that skip nginx or TLS.
 - Each process gets its own Compose service. Secrets come from a gitignored `.env` file, never from images or Compose files.
 - The backend is all Bend, except `scripts/road-build.mjs`, which decodes the `.pbf` before deploy. The app never runs it. Ask before adding an outside backend dependency or a C effect, because foreign code fails `--verdict`.
-- Don't add Python. Any supporting script is written for Node.js, which the frontend already needs.
+- Don't add Python. Any supporting script is written for Node.js, which the frontend already needs. The one exception is the OR-Tools comparison in `scripts/bench/ortools`, a benchmark image the app never runs, because OR-Tools has no Node binding.
 - The frontend is TypeScript and Preact in `frontend/`. Keep it strict: no `any`, no lint suppressions to get a check passing, and zero ESLint warnings.
 - The Bend route table is the single source of truth for the API. Change the route table, then run `npm run gen:api`. Never hand-edit `openapi.json` or the generated types.
 - The frontend calls the API only through the generated client, apart from the typed Server-Sent Events wrapper.

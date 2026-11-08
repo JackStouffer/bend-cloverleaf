@@ -674,6 +674,7 @@ def base_checks() -> List<&2, Check>:
    Check{"a report finds the busiest contractor's week", Nat.is_eq(Rp.Stats.wpeak(stats(road_inst(200n), road_plan(200n))), 420n)},
    Check{"a job no empty route can take counts as impossible", Nat.is_eq(Rp.Stats.impossible(stats(too_far_inst(), S.solve(tune(), too_far_inst(), 10n, 12n))), 1n)},
    Check{"a job an empty route could take isn't impossible", Nat.is_eq(Rp.Stats.impossible(stats(outside_inst(), B.first_fit(outside_inst(), 10n, 12n))), 0n)},
+   Check{"work that can wait isn't counted as missed", Nat.is_eq(Rp.Stats.feasible(stats(short_inst(), T.Plan{S.blank(Tm.none(), T.Instance.crews(short_inst()), 10n, 12n), T.Instance.jobs(short_inst()), Nil{}})), 0n)},
    Check{"the planner misses nothing that fits", Nat.is_eq(Rp.Stats.feasible(stats(bench(), bench_plan())), 0n)}]
 
 # Loading files
@@ -732,6 +733,7 @@ def load_checks() -> List<&2, Check>:
    Check{"a loaded instance is a valid instance", P.Instance.ok(load.inst())},
    Check{"a bad version reads as an empty instance", Nat.is_eq(List.length(&2, T.Contractor, T.Instance.crews(Ld.Got.inst(Ld.instance([2n, 10n])))), 0n)},
    Check{"a matrix file holds a time per pair", Ld.Mx.ok(load.mx(), 3n)},
+   Check{"a matrix missing its last word is refused", Bool.not(Ld.Mx.ok(Ld.Mx.bytes(load.bytes([3n, 0n, 6000n, 601n, 6000n, 0n, 4294967295n, 1800n, 4294967295n]), Ld.Mx.start(Ld.keys(load.inst()))), 3n))},
    Check{"a matrix with the wrong count is refused", Bool.not(Ld.Mx.ok(load.mx(), 4n))},
    Check{"deciseconds round up to minutes", Bool.and(Nat.is_eq(Tm.minutes(load.times(), load.home(0n), load.home(1n)), 10n), Nat.is_eq(Tm.minutes(load.times(), load.home(0n), T.Appraisal.site(load.job())), 2n))},
    Check{"a time is read in its own direction", Nat.is_eq(Tm.minutes(load.times(), T.Appraisal.site(load.job()), load.home(0n)), 3n)},

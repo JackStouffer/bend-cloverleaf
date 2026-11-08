@@ -113,6 +113,10 @@ Tested on Bend 2.0.39 on this machine (6 cores, 12 threads, 15GB RAM, 926GB free
 | Solving 10,000 jobs as 48 population-weighted states took 1.6s in total on one thread, against 19.3s as one national instance, and the largest state took 0.34s. These were separate runs on synthetic data with straight-line times | One solve per state is about 12x cheaper, and could finish in about 0.34s on 6 or more cores against 5.3s today |
 | Geofabrik's `.pbf` is sorted by type: Delaware has 350 node blocks, then 40 way blocks, then 1 relation block | One pass can't work, because a node's use isn't known until after it's been read |
 | `us-latest.osm.pbf` is 12.2GB. In Delaware, data expands 2.55x, the largest block is 1.6MB, road nodes are 25.8% of all nodes, and node IDs reach 34 bits | The US file can only be read sequentially, and most nodes can be dropped early |
+| The national solve on road times, 1,000 contractors and 10,000 appraisals in 49 states, took 2.2s on 12 threads and 8.7s on one, a 4.0x speedup, peaking at 58MB. Loading every state's instance and matrix took 2.1s, and checking every plan 0.6s. The 49 road matrices took 563s in total, Texas 102s of it | The whole nightly pipeline takes about 9.5 minutes against the proposed 30, and almost all of it is road searches |
+| Forking the states 2^1 or 2^2 ways was slower than not forking them at all (5.6-6.6s against 4.0-4.5s), and 2^3 to 2^4 was fastest (2.1-3.0s), on 12 threads, in two repeated sweeps | California is about a third of the work. With few forks it shares a leaf that also forks inside, and that runs on a couple of threads while the tree grows. The solver forks 2^4 ways |
+| With a one-hour search limit, 7-26% of a state's pairs were in reach, and nearly all of DC's and Rhode Island's | Missing pairs take the straight-line estimate, never under the limit. Trips between stops on one route are short, so this rarely matters, but rural states lean on it |
+| Against OR-Tools 9.12 given 120s a state, on identical times and rules, the Bend planner placed as many or more appraisals in Delaware, Georgia, Florida and Texas, and drove 16-23% more. OR-Tools stays in zip and minimises drive only, while the Bend planner rescues deadlines out of zip and also spreads work | Route quality has room to improve, for example with relocate and exchange moves between routes. The Bend solve takes 2.2s for the country, against 120s a state for OR-Tools |
 | Random `Array<U32>` reads took 1.5ns at 2^12 slots, 8.6ns at 2^24 and 10.6ns at 2^28. Allocating 2^28 slots took 0.9s | Arrays behave like flat memory, so large lookup tables are practical. Reuse them instead of allocating per block |
 
 Proof effort for the real rules is now measured. See the scorecard.
@@ -136,10 +140,10 @@ backend/    Bend code, LAWS.bend, PROOF.bend, Dockerfile
   core/     Pure core: types, lifecycle, plan checker, healing, planner
   proof/    Lemmas behind PROOF.bend
   test/     Concrete scenarios the laws don't cover
-  solver/   Benchmark shell and synthetic instances, later the solver process
+  solver/   Solver process: file reader, report, baselines and IO shell
   road/     Road process: graph build, search, path checks, snapping and lanes, with an IO shell
 frontend/   TypeScript and Preact npm project
-scripts/    Node scripts that run before deploy, with their tests
+scripts/    Node scripts that run before deploy or for benchmarks, with their tests
 deploy/     nginx image and config
 compose.yaml, compose.dev.yaml
 ```
@@ -155,13 +159,13 @@ Compose runs the app the way a real deployment would, so nothing talks to the ba
 | `nginx` | TLS on port 8443, redirect from 8080, static frontend, proxy to the backend |
 | `web` | Bend web process, built in a multi-stage image with Bend pinned by checksum |
 | `road` | Batch lookups, run one state at a time under a Compose profile, each run its own process, because Bend's heap never shrinks. Its image carries the road data, and jobs read and write files in `./data/jobs` |
-| `solver` | Added in Milestone 3, with the shared data volume |
+| `solver` | The nightly national solve, one run per night under a Compose profile, reading each state's instance and road matrix from `./data/jobs` and writing each plan beside them |
 | `road-build` | One-shot Node job that refreshes the cached road data in `./data/road`. Has its own image, so the Bend images stay free of Node. Runs under a Compose profile, not on `up` |
 | `frontend` | Development only. Vite with hot reload behind nginx |
 
 - **Real-world run:** `docker compose up --build` serves the built frontend, and is what Playwright, contract and load tests target.
 - **Development:** `docker compose -f compose.yaml -f compose.dev.yaml watch` keeps the same nginx and TLS path, swaps in Vite, and rebuilds the backend on change.
-- **Images:** `backend/Dockerfile` builds from the repo root into two images, `web` and `road`, and fails if `bend PROOF.bend`, the Bend checks or the scenarios fail. Both have built and run on Docker Desktop. The full stack hasn't run under `docker compose up` yet.
+- **Images:** `backend/Dockerfile` builds from the repo root into three images, `web`, `road` and `solver`, and fails if `bend PROOF.bend`, the Bend checks or the scenarios fail. All three have built and run on Docker Desktop, and the national solve ran in the `solver` image under its 2GB cap. The full stack hasn't run under `docker compose up` yet.
 - **Certificates:** nginx creates a self-signed certificate in a Docker volume on first start. No key is ever committed.
 - **Secrets:** later secrets come from a gitignored `.env` file, never from the images or Compose files.
 - **Backend protection:** nginx buffers requests and limits body size, so slow or oversized clients never reach Bend's event loop. Server-Sent Events will need a route with buffering turned off.
@@ -247,7 +251,7 @@ Caps, set with Compose `mem_limit` and an equal `memswap_limit`. `road` and `roa
 |---|---|---|
 | `nginx` | 64MB | Static files and proxying |
 | `web` | 512MB | Unmeasured until Milestone 4 |
-| `solver` | 2GB | 44MB today on straight-line times, before matrices and events |
+| `solver` | 2GB | 58MB on the national solve with every state's road times, before events |
 | `road` | 1GB | On turn graphs, Texas runs one lane in 546MB, and 584MB on a 1,000-stop matrix |
 | `road-build` | 1GB | 746MB on the full US, with turn graphs. Run only to refresh data |
 | OS and page cache | About 3.3GB | Whatever is left |
@@ -271,6 +275,7 @@ Proven so far in `LAWS.bend`, for the pure core:
 - Every stop on a route is in the contractor's state, including out-of-zip work.
 - A request from another state changes nothing.
 - Parallel and sequential selection give the same answer.
+- The national solve gives every state exactly one plan, valid for that state's own instance, and forking the states changes no plan.
 - A reported drive time is the exact cost of a path that really walks the graph from source to destination, within the limit.
 - Searches and lookups leave the graph unchanged, and reading an array changes nothing.
 - Dealing work to lanes loses nothing and merges back in order.
@@ -295,6 +300,7 @@ Not proven:
 - That a road search finds the shortest time, or finds a path at all. `test/scenario.bend` compares it with Bellman-Ford, and `scripts/check-road-matrix.mjs` with a separate Dijkstra.
 - That the adjacency build or snapping is right. They rely on the scenarios and the same script.
 - That the planner places work at all. A valid plan may leave everything in the backlog, so `test/scenario.bend` covers this.
+- That the planner misses no feasible deadline. The benchmark counts urgent work left out that still fits somewhere in the finished plan, and how much wouldn't fit even an empty route.
 - That the planner handles the tightest deadline first. Also covered by the scenarios.
 - That road times match reality. No law looks inside the travel time function, so swapping in real road times changes no proof.
 - That the emitted `openapi.json` means the same thing as the Bend schema. Contract tests check real responses against the spec instead.
@@ -327,6 +333,7 @@ The Node road build is done for the whole country, one folder per state, and its
 Synthetic data generator, one nightly multi-day solve per state, contractor assignment, balance, and capped out-of-zip overflow.
 
 **Done when:** a 10,000-appraisal, 1,000-contractor day solves in a proposed 30 minutes, no feasible deadline is missed, and results beat simple baselines. We'll also measure speedup on real solver work and benchmark against OR-Tools.
+**Status:** done. The nightly pipeline runs in about 9.5 minutes on real road times: 563s of road matrices, then a 2.2s national solve on 12 threads. No urgent appraisal is left out that still fits in the finished plan, against 55 for first fit and 156 for nearest. The planner also places more and drives 22-33% less than both baselines. Against OR-Tools it places as many or more and drives 16-23% more. See the scorecard.
 
 ### 4. Web platform and API (XL)
 
@@ -498,12 +505,82 @@ Some injected bugs were caught because a proof script stopped matching the code,
 
 - **Parallel reads:** an array has one owner, so lanes can't share a read-only graph without `@unsafe`. Copying it is the largest memory cost in the road search.
 
+### Milestone 3 results
+
+**What was built**
+
+- `core/times.bend`: each `Instance` carries a `Times` table of drive minutes, a search tree keyed by point and built from the road matrices. Every def that works out drive time takes it.
+- `core/nation.bend`: the national solve, one instance per state, forked by estimated work.
+- `scripts/synth.mjs`: a national instance from census population, with real road junctions inside each state for sites and homes, zips as 0.1 degree cells, and varied hours, calendars and deadlines.
+- `scripts/nightly.mjs`: one capped road process per state for the matrices, then one solver process for the country.
+- `solver/`: the reader for instances and matrices, the report, two baselines, and the shell. `scripts/bench/ortools` holds the OR-Tools comparison, the one place Python is allowed.
+
+**Results on 1,000 contractors and 10,000 appraisals**
+
+| | Planner | First fit | Nearest |
+|---|---|---|---|
+| Placed | 9,774 | 9,644 | 9,238 |
+| Exceptions | 186 | 282 | 747 |
+| Urgent, left out, but would fit | 0 | 55 | 156 |
+| Late stops | 0 | 0 | 0 |
+| Out of zip, within the cap | 39 | 0 | 0 |
+| Drive minutes | 368,016 | 550,589 | 469,598 |
+| Minutes per contractor-week, mean and sd | 571, 484 | 751, 740 | 661, 488 |
+
+Of the 186 exceptions, 130 wouldn't fit even an empty route on their own: no contractor who covers the zip, or can reach it within the cap, works early enough with the hours for a trip there and back. That isn't proof they were impossible, because a stop on a route already driving that way costs less. The planner placed some that this count calls hopeless.
+
+| State, OR-Tools at 120s | Placed, Bend and OR-Tools | Urgent missed | Drive minutes, Bend and OR-Tools |
+|---|---|---|---|
+| Delaware | 30, 30 | 0, 0 | 983, 802 |
+| Georgia | 323, 323 | 2, 2 | 11,079, 9,272 |
+| Florida | 647, 645 | 7, 9 | 15,146, 12,717 |
+| Texas | 872, 870 | 12, 15 | 32,544, 27,560 |
+
+**Proof effort**
+
+| Measure | Result |
+|---|---|
+| Laws | 53, up from 50. Three are new and 9 gained a table argument |
+| Core code | 2,198 lines |
+| Proofs | 8,315 lines |
+| Proof gate | Still 0.6s, and `--verdict` passes |
+| `@unsafe` or foreign code | None |
+
+**How far changes ripple**
+
+- Passing the time table through the core changed 178 lines of core and 606 lines of proof. All of it was mechanical: a script added the argument wherever `cap` was passed, and a loop read the checker's errors to add it to each lemma that needed it. No proof changed shape, and no law got weaker. The 9 laws that name a drive-time function gained the argument, with the user's approval.
+- The three national laws took 108 lines of lemmas and 30 lines in `PROOF.bend`. Base's `List.get`, `take` and `drop` were enough, with the `take_drop` lemma from Milestone 1.
+- Adding the retry pass changed one proof line, because `solved_plan_is_valid` rests on `publish`.
+
+**Bugs**
+
+Proofs caught no bug in the code as written. These were found another way:
+
+- **Missed deadlines:** the first national run left 15 urgent appraisals out that still fit in the finished plan. Polishing shortens routes after work was turned away. A retry pass after polishing fixed it, found by the benchmark's own count.
+- **Eager choice:** `Bool.pick` evaluates both arms, so choosing a baseline with it ran both, doubling the time. A second use, in the weekly tally, would have been exponential, and the affine checker refused it because a list was used twice.
+- **A stale input:** instance files from before a format change read as an instance of one point. The shell's size check on the matrix caught it before any solve.
+- **An overclaim:** the first report called work that fits no empty route "impossible". The numbers contradicted it, because the planner had placed some.
+
+**Injected bugs**
+
+We injected 12 into the new code. `bend PROOF.bend` caught 4: two broke a national law, and two only made a proof script stop matching. The scenarios caught 8, two of them only after adding scenarios for gaps the first run found: a truncated matrix, and work that can wait counted as missed. Removing the retry pass is caught by no law and no scenario, only by the benchmark.
+
+**Friction**
+
+- **No mutual recursion:** a parser for variable-length records is naturally a set of functions calling each other. The way through was a format a single structurally recursive def can parse with `take` and `drop`, so the file format changed to suit the language.
+- **Matching computed values:** every decision needs its own helper def, and a helper can't call back into the recursion. The matrix reader is a state machine of eight small defs for this reason.
+- **Definition order:** a def must come after the defs it calls, so the shell's command dispatch is written bottom-up.
+- **Affine arguments:** `IO.args` returns an affine list, so a list of names used twice has to be copied first.
+- **Scheduling:** the fork-depth result is the opposite of a hunch again. Forking the states a little is slower than not forking at all.
+- **Good:** the national laws were short to prove, the time table rippled through 600 lines of proof without a single proof changing shape, and the checker caught an exponential blowup as a type error.
+
 ## Main risks
 
 1. **Bend's unlimited heap:** the road process passes the gate within its cap, but one bad size can fill the machine with no warning. Budget checks and memory caps are the only defense, and each new process needs its own.
-2. **Proof effort:** measured at 3.7 proof lines per line of code, and manageable. The risk now is the verbosity of proofs at web scale, not whether they can be done.
-3. **Scale of road data in Bend's memory model:** lists and strings are expensive, so performance depends on staying in arrays.
-4. **Geocoding quality:** free address data has gaps, particularly in rural areas.
-5. **Phone GPS:** browsers allow geolocation only on trusted HTTPS or localhost. nginx provides HTTPS, but a phone won't trust the self-signed certificate, so a real-phone test needs a certificate the phone trusts. The fleet will use simulated locations.
-6. **Local-only hosting:** no real outside dealer can reach the API, so the demo relies on simulated clients.
-7. **Schema law at full scale:** the spike's law compared field names by length only, because Base has `String.eq` but no proof that it's reflexive. The real law needs that lemma, and proof effort on the full schema is unknown.
+2. **Proof effort:** measured at 3.7 proof lines per line of code, and manageable. The risk now is the verbosity of proofs at web scale, not whether they can be done. A cross-cutting change like the time table touches hundreds of proof lines, though a script can make most of the edits.
+3. **Route quality:** the planner drives 16-23% more than OR-Tools. It's fast, so there's time for stronger moves between routes.
+4. **Scale of road data in Bend's memory model:** lists and strings are expensive, so performance depends on staying in arrays.
+5. **Geocoding quality:** free address data has gaps, particularly in rural areas.
+6. **Phone GPS:** browsers allow geolocation only on trusted HTTPS or localhost. nginx provides HTTPS, but a phone won't trust the self-signed certificate, so a real-phone test needs a certificate the phone trusts. The fleet will use simulated locations.
+7. **Local-only hosting:** no real outside dealer can reach the API, so the demo relies on simulated clients.
+8. **Schema law at full scale:** the spike's law compared field names by length only, because Base has `String.eq` but no proof that it's reflexive. The real law needs that lemma, and proof effort on the full schema is unknown.

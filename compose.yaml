@@ -71,6 +71,25 @@ services:
     volumes:
       - ./data/jobs:/jobs
 
+  # The nightly national solve, one process per run, reading each state's
+  # instance and road matrix from ./data/jobs:
+  #   docker compose --profile solver run --rm solver national /jobs/synth planner 36000 4 <state>...
+  # scripts/nightly.mjs builds the matrices and passes the states.
+  solver:
+    image: cloverleaf-solver
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: solver
+    profiles:
+      - solver
+    init: true
+    user: "${UID:-1000}:${GID:-1000}"
+    mem_limit: 2g
+    memswap_limit: 2g
+    volumes:
+      - ./data/jobs:/jobs
+
   # Refreshes the cached road data in ./data/road that local images copy. It only
   # runs when asked: docker compose run --rm road-build
   road-build:
