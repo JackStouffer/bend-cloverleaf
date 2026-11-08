@@ -96,15 +96,17 @@ Tested on Bend 2.0.39 on this machine (6 cores, 12 threads, 15GB RAM, 926GB free
 | In Georgia (358MB), service roads are 44% of road nodes and 68% of graph nodes | Dropping service roads shrinks the graph 3x |
 | Stopping a graph at the state line gave wrong drive times. Compared with a graph of the whole South, across 53M Georgia pairs, no margin left 1.85% of near-border pairs unreachable. 20km still left trips up to 26 minutes too slow. At 40km every pair matched exactly, for 37% more graph | Each state's graph runs 40km past its border. This was measured on Georgia only, and Geofabrik's state extracts can't be used, because they stop at about the border |
 | Bend's road search matched Node's settled counts exactly on real Georgia and Texas graphs. A one-hour search took 38-41ms on one thread, about 1.5x slower than Node, and Texas loaded in 0.22s | A whole state fits in memory and searches fast, so regions and an overlay aren't needed. This spike was `@unsafe`, read adjacency arrays built by Node, and used a hand-written def per array read |
-| Each search lane needs its own copy of the graph, because an array has one owner. A Texas lane takes 134MB, so 4 lanes peak at 546MB, and 8 would go over the 1GB cap | `road` works out what fits from the array sizes and refuses more before it copies anything. Lanes range from 4 in Texas to 64 in small states |
+| Each search lane needs its own copy of the graph, because an array has one owner. A Texas lane takes 134MB, so 4 lanes peak at 546MB, and 8 would go over the 1GB cap | `road` works out what fits from the array sizes and refuses more before it copies anything. On turn graphs, a Texas lane takes 536MB, so Texas and California get 1 lane |
 | The spike's 800 searches on Georgia took 30.2s on 1 lane, 16.4s on 2, 15.9s on 4 and 6.0s on 8. Lanes weren't uneven. The runtime skips no-fork defs while a fork tree grows, but runs any def that can fork, so a lane inside a forking def's base case ran during the grow, on only 2 rows of threads. With a direct parallel call to a no-fork def, the same work took 19.9s, 11.7s, 6.7s and 4.3s on the real graph, against 17.9s, 9.9s, 9.9s and 6.3s for the old shape in the same run | A fork tree must end in a parallel call to a def that never forks. Expect 4.4x from 8 lanes. The rest of the gap is memory: 6 cores, with a shared 32MB L3 under graphs larger than that |
 | A road search written as one `Nat`-fuel def per loop passes the gate and compiles to flat loops, with the last read passed as a pair parameter. Texas took 34.7ms per search on one thread against the `@unsafe` spike's 38-41ms, and matched Node's settled counts exactly | Passing the gate cost no speed. Go/no-go for Milestone 2 passes |
 | Bend builds Texas's adjacency from `edges.bin` in 1.45s, in two passes. All 49 states loaded and searched under a hard 1GB cap, peaking at 152MB on one lane | The road process needs nothing precomputed but the road records |
 | A heap capacity of 2^20 entries is far above what real searches use: 530 entries at most in Delaware | Capacity is checked on every push and a full heap fails the search, so nothing wraps |
 | A Texas matrix of 1,000 stops took 12.1s on 4 lanes, with every reached cell's path walked and checked, peaking at 600MB. All 1,000,000 cells matched an independent Node implementation | Checking every reported time costs almost nothing, because the 1-hour limit leaves only 8% of cells reachable |
 | Against OSRM v6.0.0's car profile, with our first-guess speeds, our times ran 24% fast and 0.2% of Georgia trips were within 10% | Default speeds and the 80% factor on posted limits now come from OSRM's car profile (BSD-2-Clause, credited in `scripts/OSRM-LICENSE.txt`) |
-| After that, the share of trips within 10% of OSRM was 99.4% in Georgia (11,663 trips), 98.7% in central Texas (29,093) and 97.7% in Delaware (45,037). Ours run a median 2.5-3% faster, because we model no turn or traffic signal delays. Trips under 5 minutes do worst, 62-79% within | Passes the agreed bar: 90% of trips within 10% of OSRM. Turn costs would need a turn-expanded graph |
-| In Delaware, 3 of 300 sample points could be reached but led nowhere, because their only exit was a private road we leave out. That cost 374 trips | Small cut-off pieces of the graph need dropping, as OSRM does, so stops never snap into them |
+| After that, the share of trips within 10% of OSRM was 99.4% in Georgia (11,663 trips), 98.7% in central Texas (29,093) and 97.7% in Delaware (45,037). Ours ran a median 2.5-3% faster, with no turn or traffic signal delays. Trips under 5 minutes did worst, 62-79% within | Passed the agreed bar, 90% of trips within 10% of OSRM. Turns came next |
+| In Delaware, 3 of 300 sample points could be reached but led nowhere, because their only exit was a private road we leave out. That cost 374 trips | The build drops strongly connected pieces under 1,000 junctions, OSRM's threshold, so stops never snap into them. Texas lost 1.7% of its junctions |
+| With OSRM's turn costs and its delays for signals, stop and give-way signs, the median ratio to OSRM became 0.999-1.000. Within 10%: Georgia 99.7% (9,825 trips), central Texas 99.8% (28,113), Delaware 99.2% (45,757). Trips under 5 minutes rose to 95-97%, and no trip was missed | Searches run on a turn graph. To the Bend search it's an ordinary graph, so no law or proof changed |
+| A Texas turn graph has 9.4M nodes and 21.3M arcs, against 2.0M and 5.4M before. A search takes 82ms on one lane, against 47ms. A 1,000-stop matrix took 94.6s on one lane, peaking at 584MB, and matched the separate checker in every cell | Turns roughly double search time and quadruple memory. Contraction Hierarchies would buy that back |
 | A Georgia outlier ran 14 minutes slow because the only short way in was a 130m one-lane bridge tagged `highway=service` | Leaving service roads out costs the odd detour. Rare enough to accept for now |
 | OSRM needed 10.3GB to preprocess Georgia plus a 50km margin, and 4.9GB for central Texas | A whole Texas couldn't be compared under a safe cap, so the comparison used a central region with points 50km inside it |
 | A bad lane depth was killed by a 2GB cgroup cap within 30s, cloning the graph without limit. Run with no cap, the same command is the likely cause of two reboots of the whole WSL machine | Going over budget can take the machine down, not just the process. Pure budget checks run before any allocation, and every binary runs under a `MemoryMax` cap with `MemorySwapMax=0` |
@@ -152,18 +154,18 @@ Compose runs the app the way a real deployment would, so nothing talks to the ba
 |---|---|
 | `nginx` | TLS on port 8443, redirect from 8080, static frontend, proxy to the backend |
 | `web` | Bend web process, built in a multi-stage image with Bend pinned by checksum |
-| `road` | Batch lookups, run one state at a time under a Compose profile, each run its own process, because Bend's heap never shrinks. Shares the backend image |
+| `road` | Batch lookups, run one state at a time under a Compose profile, each run its own process, because Bend's heap never shrinks. Its image carries the road data, and jobs read and write files in `./data/jobs` |
 | `solver` | Added in Milestone 3, with the shared data volume |
-| `road-build` | One-shot Node job that turns the `.pbf` into per-state road records. Has its own image, so the Bend images stay free of Node. Runs under a Compose profile, not on `up` |
+| `road-build` | One-shot Node job that refreshes the cached road data in `./data/road`. Has its own image, so the Bend images stay free of Node. Runs under a Compose profile, not on `up` |
 | `frontend` | Development only. Vite with hot reload behind nginx |
 
 - **Real-world run:** `docker compose up --build` serves the built frontend, and is what Playwright, contract and load tests target.
 - **Development:** `docker compose -f compose.yaml -f compose.dev.yaml watch` keeps the same nginx and TLS path, swaps in Vite, and rebuilds the backend on change.
-- **Images:** the backend image fails to build if `bend PROOF.bend`, the Bend checks or the scenarios fail. `road-build` has its own image from `scripts/`. None of this has run on Docker yet.
+- **Images:** `backend/Dockerfile` builds from the repo root into two images, `web` and `road`, and fails if `bend PROOF.bend`, the Bend checks or the scenarios fail. Both have built and run on Docker Desktop. The full stack hasn't run under `docker compose up` yet.
 - **Certificates:** nginx creates a self-signed certificate in a Docker volume on first start. No key is ever committed.
 - **Secrets:** later secrets come from a gitignored `.env` file, never from the images or Compose files.
 - **Backend protection:** nginx buffers requests and limits body size, so slow or oversized clients never reach Bend's event loop. Server-Sent Events will need a route with buffering turned off.
-- **Road data:** kept in a bind-mounted, gitignored `data/` folder on the Linux filesystem, because it's too large for an image.
+- **Road data:** part of the `road` image, at `/road/<state>`. A plain `docker build` fetches the US extract and rebuilds the data from scratch, as a deployed image should. Local Compose runs set `ROAD_DATA=local` and copy the cached, gitignored `data/road` instead, which takes about 30 seconds instead of half an hour. The image is about 10GB.
 
 ### API contract
 
@@ -218,15 +220,18 @@ The build runs before deploy, so it can run on another machine and ship only its
 
 4. **States.** Contractors never cross a state line, so each state gets its own folder of files, numbered on their own. One state at a time, rasterize its outline, spread it 40km, and keep the junctions and edges inside. A road near a border lands in both states' files, which is why 49 folders hold about 1.3x the national data.
 
-Each folder has three files of little-endian `U32` words, each under 4GB so Bend can read them with `read_at`. The header of the script defines the format.
+Each folder has four files of little-endian `U32` words, each under 4GB so Bend can read them with `read_at`. The header of `scripts/road-build.mjs` is the definition of the format, and `scripts/rebuild-road-data.mjs` rebuilds the data from scratch.
 
 | File | Record | Georgia | Texas, the largest |
 |---|---|---|---|
 | `nodes.bin` | 2 words: lat, lon | 8MB | 17MB |
 | `edges.bin` | 6 words: from, to, meters, deciseconds, flags, shape | 29MB | 67MB |
 | `shapes.bin` | 2 words: lat, lon | 74MB | 125MB |
+| `turns.bin` | 3 words: from, to, deciseconds | 111MB | 256MB |
 
-There are no regions or overlay. A state's graph comes to at most 49MB of adjacency, so the road process loads a whole state into memory and runs a bounded search from each stop. A trip never leaves its state, so nothing needs to cross the country.
+There are no regions or overlay. The road process loads a whole state's turn graph into memory, at most about 256MB, and runs a bounded search from each stop. A trip never leaves its state, so nothing needs to cross the country.
+
+Searches run on a turn graph, built by `road-turns.mjs`. Each road in each direction is a node, and each allowed turn is an arc costing OSRM's turn penalty, any signal, stop or give-way delay at the junction, and the next road. U-turns are allowed only at dead ends. Each junction also has a depart and an arrive node, so a trip runs from one to the other and the search sees an ordinary graph. Pieces of the graph under 1,000 junctions that can't reach the rest, or be reached from it, are dropped. Turn restrictions from OSM relations aren't modeled yet.
 
 `road matrix` takes stops as coordinates, snaps each to its nearest node through a hash grid of 0.02 degree cells, and writes a matrix of drive times. Service roads stay out of the routing graph. A stop on one snaps to the nearest public road, which slightly understates the last few hundred meters. Road shapes stay in their own file, read only when drawing a route.
 
@@ -234,7 +239,7 @@ Roads closed to cars stay out of the graph, using the most specific of `motorcar
 
 At runtime, the road process holds one state at a time. The nightly solve knows all its lookups up front, so it loads each state once, runs its searches, and writes that state's travel-time matrices. The solver reads those instead of touching the graph. Same-day repairs need only a few searches in the contractor's state, and still need a long-running road service in Milestone 6. Lanes are set per state from its size, because each lane copies the graph, and `road` refuses a depth that doesn't fit a 900MB budget.
 
-Scaling from Texas, about 11,000 one-hour searches a night take about 7 minutes on one thread, before any parallel speedup. A repair needing 10 searches takes about 0.4s.
+Texas, the slowest state, runs a 1,000-stop matrix in about 95s on its one lane. A repair needing 10 searches takes about 0.8s, after a 4.5s load.
 
 Caps, set with Compose `mem_limit` and an equal `memswap_limit`. `road` and `road-build` have been checked on real runs with `systemd-run`, but not yet on Docker:
 
@@ -243,8 +248,8 @@ Caps, set with Compose `mem_limit` and an equal `memswap_limit`. `road` and `roa
 | `nginx` | 64MB | Static files and proxying |
 | `web` | 512MB | Unmeasured until Milestone 4 |
 | `solver` | 2GB | 44MB today on straight-line times, before matrices and events |
-| `road` | 1GB | Texas ran 4 lanes in 546MB, and 600MB on a 1,000-stop matrix. All 49 states pass on one lane |
-| `road-build` | 1GB | 564MB on the full US. Run only to refresh data |
+| `road` | 1GB | On turn graphs, Texas runs one lane in 546MB, and 584MB on a 1,000-stop matrix |
+| `road-build` | 1GB | 746MB on the full US, with turn graphs. Run only to refresh data |
 | OS and page cache | About 3.3GB | Whatever is left |
 
 ### Solving in parallel
@@ -315,7 +320,7 @@ The Node road build is done for the whole country, one folder per state, and its
 
 **Done when:** the road process serves lookups for its largest state under a hard 1GB cap, and a sample of routes is within an agreed margin of a reference router. The lower-48 road build already completes under its hard 1GB cap.
 **Go/no-go:** if a gate-passing search is too slow or too large for Texas, reduce lanes first, then graph detail.
-**Status:** go. The gate-passing search beats the spike on Texas and fits the cap. Private roads are filtered out, and drive times pass the reference check: OSRM v6.0.0 is the reference, and the agreed bar is 90% of trips within 10%. Still open: dropping small cut-off pieces of the graph, and a first real run of Compose.
+**Status:** go. The gate-passing search beats the spike on Texas and fits the cap. Private roads are filtered out, and drive times pass the reference check: OSRM v6.0.0 is the reference, and the agreed bar is 90% of trips within 10%. Searches include OSRM's turn and obstacle costs, and the median ratio to OSRM is 1.000. Still open: turn restrictions, and a first real run of Compose.
 
 ### 3. National solver (L)
 
@@ -471,6 +476,7 @@ We injected 29. `bend PROOF.bend` caught 20 and `test/scenario.bend` caught 9, a
 - **Heap limit:** no limit means a sizing mistake can reboot the machine. This is the most serious operational risk found so far.
 - **Rewriting:** `%e` direction again cost about eight failed attempts.
 - **Small traps:** `+` on a field of a dependent pair fails with "cannot infer", so such fields go through a helper. Base takes names like `Key` and `Word`, and `is` is a keyword. `match xs ys` with a wildcard doesn't reduce when the other side is unknown, so proofs split those cases out.
+- **Good:** keeping the search generic paid off. Adding turn costs meant a new graph built in Node and a 60-line loader in Bend, with no change to the search, its 8 laws or their proofs.
 - **Good:** a loop with a mode argument and a pair parameter is both gate-passing and faster than the spike's chain of defs. The search-keeps-the-graph proof was generated from the search's own arms and passed first try. Templates gave one file-reading fold for four record types.
 
 ### One state per contractor

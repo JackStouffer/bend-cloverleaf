@@ -1,10 +1,9 @@
 import Base
 
-# Builds one state's adjacency from its edge records. Pure: the shell hands in
-# chunks of edges.bin, and nothing here sees a file.
-#
-# An edge is 6 little-endian words: from, to, meters, deciseconds, flags, shape.
-# Bit 4 of flags means one-way, so any other edge becomes two arcs.
+# Builds one state's adjacency from its road records. Pure: the shell hands in
+# chunks of a file, and nothing here sees one. scripts/road-build.mjs defines
+# the files: an edge is 6 little-endian words, and bit 4 of its flags means
+# one-way, so any other edge becomes two arcs.
 #
 # The result is the graph that road/search.bend reads: g[0] nodes, g[1] arcs,
 # first arc per node from slot 2, then arcs from slot n + 4 as (head,
@@ -148,3 +147,62 @@ def Place.step(xs: List<&2, U32>, t: Tally) -> Tally:
 
 def Graph.head(g: Array<U32>, +n: U32, +arcs: U32) -> Array<U32>:
   Array.set(U32, Array.set(U32, g, 0, n), 1, arcs)
+
+# Turn graphs
+# -----------
+
+# turns.bin holds 3 words per arc, from, to and deciseconds, and every arc is
+# one-way. Its nodes are each road in each direction, then a depart and an
+# arrive node per junction, as scripts/road-build.mjs defines.
+
+def Size.turns(+nodes: Nat, +arcs: Nat) -> Nat:
+  Nat.add(Nat.add(nodes, 4n), Nat.mul(2n, arcs))
+
+def Turn.count(ok: Bool, g: Array<U32>, +from: U32) -> Array<U32>:
+  match ok:
+    case True{}:
+      Count.one(g, from)
+    case False{}:
+      g
+
+def Turn.counted(xs: List<&2, U32>, g: Array<U32>, +n: U32, +arcs: U32, +bad: U32) -> Tally:
+  match xs:
+    case +a0 <> +a1 <> +a2 <> +a3 <> +b0 <> +b1 <> +b2 <> +b3 <> _ <> _ <> _ <> _ <> t:
+      +from = le(a0, a1, a2, a3)
+      +ok = Edge.fits(n, from, le(b0, b1, b2, b3))
+      Turn.counted(t, Turn.count(ok, g, from), n, (arcs + 1 : U32), (bad + Bool.to_u32(Bool.not(ok)) : U32))
+    case _:
+      Tally{g, n, arcs, arcs, bad}
+
+def Turn.placed(xs: List<&2, U32>, g: Array<U32>, +n: U32, +arcs: U32) -> Tally:
+  match xs:
+    case +a0 <> +a1 <> +a2 <> +a3 <> +b0 <> +b1 <> +b2 <> +b3 <> +c0 <> +c1 <> +c2 <> +c3 <> t:
+      Turn.placed(t, Place.arc(g, n, le(a0, a1, a2, a3), le(b0, b1, b2, b3), le(c0, c1, c2, c3)), n, (arcs + 1 : U32))
+    case _:
+      Tally{g, n, arcs, arcs, 0}
+
+def Turn.count.step(xs: List<&2, U32>, t: Tally) -> Tally:
+  match t:
+    case Tally{g, +n, _, +arcs, +bad}:
+      Turn.counted(xs, g, n, arcs, bad)
+
+def Turn.place.step(xs: List<&2, U32>, t: Tally) -> Tally:
+  match t:
+    case Tally{g, +n, _, +arcs, _}:
+      Turn.placed(xs, g, n, arcs)
+
+# How many roads-by-direction an edges.bin holds: one per edge, two if two-way.
+type Ways is Data:
+  Ways{edges: U32, directions: U32}
+
+def Ways.chunk(xs: List<&2, U32>, +edges: U32, +directions: U32) -> Ways:
+  match xs:
+    case _ <> _ <> _ <> _ <> _ <> _ <> _ <> _ <> _ <> _ <> _ <> _ <> _ <> _ <> _ <> _ <> +f0 <> _ <> _ <> _ <> _ <> _ <> _ <> _ <> t:
+      Ways.chunk(t, (edges + 1 : U32), (directions + 1 + Bool.to_u32(Edge.two(f0)) : U32))
+    case _:
+      Ways{edges, directions}
+
+def Ways.step(xs: List<&2, U32>, w: Ways) -> Ways:
+  match w:
+    case Ways{+edges, +directions}:
+      Ways.chunk(xs, edges, directions)

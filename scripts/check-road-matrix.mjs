@@ -1,6 +1,7 @@
 // Checks a matrix from the Bend road process against a separate implementation,
 // sharing no code with it: a brute-force nearest node and a plain Dijkstra over
-// the same records. Exits non-zero if any cell differs.
+// the same turn graph, from each stop's depart node to each stop's arrive node.
+// Exits non-zero if any cell differs.
 //
 //   node scripts/check-road-matrix.mjs sample <state folder> <count> <points file>
 //   node scripts/check-road-matrix.mjs check <state folder> <points file> <matrix file> <limit>
@@ -36,28 +37,34 @@ function sample(folder, count, output) {
   fs.writeFileSync(output, new Uint8Array(points.buffer));
 }
 
-function adjacency(folder, nodeCount) {
+// The turn graph: roads by direction first, one per edge and two if two-way, then
+// a depart and an arrive node per junction.
+function adjacency(folder, junctions) {
   const edges = load(`${folder}/edges.bin`, Uint32Array);
-  const first = new Uint32Array(nodeCount + 1);
+  const turns = load(`${folder}/turns.bin`, Uint32Array);
+  let directions = 0;
   for (let i = 0; i < edges.length; i += EDGE_WORDS) {
-    first[edges[i] + 1]++;
-    if (!(edges[i + 4] & ONE_WAY_FLAG)) first[edges[i + 1] + 1]++;
+    directions += edges[i + 4] & ONE_WAY_FLAG ? 1 : 2;
   }
+  const nodeCount = directions + 2 * junctions;
+  const first = new Uint32Array(nodeCount + 1);
+  for (let i = 0; i < turns.length; i += 3) first[turns[i] + 1]++;
   for (let i = 0; i < nodeCount; i++) first[i + 1] += first[i];
   const next = first.slice();
   const heads = new Uint32Array(first[nodeCount]);
   const costs = new Uint32Array(first[nodeCount]);
-  const add = (from, to, cost) => {
-    heads[next[from]] = to;
-    costs[next[from]++] = cost;
-  };
-  for (let i = 0; i < edges.length; i += EDGE_WORDS) {
-    add(edges[i], edges[i + 1], edges[i + 3]);
-    if (!(edges[i + 4] & ONE_WAY_FLAG)) {
-      add(edges[i + 1], edges[i], edges[i + 3]);
-    }
+  for (let i = 0; i < turns.length; i += 3) {
+    heads[next[turns[i]]] = turns[i + 1];
+    costs[next[turns[i]]++] = turns[i + 2];
   }
-  return { first, heads, costs };
+  return {
+    first,
+    heads,
+    costs,
+    nodeCount,
+    depart: directions,
+    arrive: directions + junctions,
+  };
 }
 
 // The same metric as road/snap.bend: units of 1e-5 degrees, Bhaskara's cosine.
@@ -133,18 +140,18 @@ function check(folder, pointsFile, matrixFile, limit) {
   for (let i = 0; i < count; i++) {
     stops.push(nearest(nodes, points[2 * i], points[2 * i + 1]));
   }
-  const dist = new Uint32Array(nodes.length / 2);
+  const dist = new Uint32Array(graph.nodeCount);
   let reached = 0;
   let wrong = 0;
   for (let i = 0; i < count; i++) {
-    search(graph, stops[i], limit, dist);
+    search(graph, graph.depart + stops[i], limit, dist);
     for (let j = 0; j < count; j++) {
       const got = matrix[1 + i * count + j];
-      if (dist[stops[j]] !== UNREACHABLE) reached++;
-      if (got !== dist[stops[j]]) {
-        if (wrong++ < 5) {
-          console.error(`${i} to ${j}: ${got}, expected ${dist[stops[j]]}`);
-        }
+      const want = dist[graph.arrive + stops[j]];
+      if (want !== UNREACHABLE) reached++;
+      if (got !== want) {
+        if (wrong++ < 5)
+          console.error(`${i} to ${j}: ${got}, expected ${want}`);
       }
     }
   }

@@ -10,6 +10,9 @@ import ./lanes.bend as L
 #   road bench <state folder> <searches> <limit in deciseconds> <lane depth>
 #   road matrix <state folder> <points file> <output file> <limit> <lane depth>
 #
+# Searches run on the state's turn graph, so a trip from junction a to junction b
+# runs from a's depart node to b's arrive node, as scripts/road-build.mjs defines.
+#
 # The points file holds 2 little-endian words per point: lat, lon as int32
 # degrees * 1e7, like nodes.bin. The output file holds the point count, then a
 # word per pair in row order: deciseconds, or 4294967295 if out of reach.
@@ -28,6 +31,9 @@ def Chunk.edges() -> U32:
   786432
 
 def Chunk.nodes() -> U32:
+  786432
+
+def Chunk.turns() -> U32:
   786432
 
 # Reading a file
@@ -92,32 +98,42 @@ def Need(ok: Bool, +msg: String) -> IO(Unit):
 # The graph
 # ---------
 
+# A turn graph, with how many junctions and roads-by-direction it was made from.
 type Loaded is Type:
-  Loaded{g: Array<U32>, nodes: Nat, arcs: Nat, depth: Nat}
+  Loaded{g: Array<U32>, nodes: Nat, arcs: Nat, depth: Nat, junctions: Nat, directions: Nat}
 
-def Load.placed(t: G.Tally, +path: String, +nodes: Nat, +edges: Nat, +arcs: Nat) -> IO(Loaded):
+def Load.placed(t: G.Tally, +path: String, +nodes: Nat, +arcs: Nat, +junctions: Nat, +directions: Nat) -> IO(Loaded):
   G.Tally{g, _, +seen, _, _} = t
   do IO<Loaded>:
-    Need(Nat.is_eq(U32.to_nat(seen), edges), path ++ ": placed " ++ U32.show(seen) ++ " of " ++ Nat.show(edges) ++ " edges")
-    return Loaded{G.Graph.head(g, U32.from_nat(nodes), U32.from_nat(arcs)), nodes, arcs, G.Size.depth(32n, False{}, G.Size.graph(nodes, edges), 0n)}
+    Need(Nat.is_eq(U32.to_nat(seen), arcs), path ++ ": placed " ++ U32.show(seen) ++ " of " ++ Nat.show(arcs) ++ " arcs")
+    return Loaded{G.Graph.head(g, U32.from_nat(nodes), U32.from_nat(arcs)), nodes, arcs, G.Size.depth(32n, False{}, G.Size.turns(nodes, arcs), 0n), junctions, directions}
 
-def Load.counted(t: G.Tally, +path: String, +nodes: Nat, +edges: Nat) -> IO(Loaded):
-  G.Tally{g, +n, +seen, +arcs, +bad} = t
+def Load.counted(t: G.Tally, +path: String, +nodes: Nat, +arcs: Nat, +junctions: Nat, +directions: Nat) -> IO(Loaded):
+  G.Tally{g, +n, +seen, _, +bad} = t
   do IO<Loaded>:
-    Need(Nat.is_eq(U32.to_nat(seen), edges) && U32.is_zero(bad), path ++ ": read " ++ U32.show(seen) ++ " of " ++ Nat.show(edges) ++ " edges, " ++ U32.show(bad) ++ " bad")
-    done : G.Tally <- Fold.file(~G.Tally, ~G.Place.step, path, Nat.mul(edges, 24n), Chunk.edges(), G.Tally{G.Sum.run(g, nodes), n, 0, 0, 0})
-    out : Loaded <- Load.placed(done, path, nodes, edges, U32.to_nat(arcs))
+    Need(Nat.is_eq(U32.to_nat(seen), arcs) && U32.is_zero(bad), path ++ ": read " ++ U32.show(seen) ++ " of " ++ Nat.show(arcs) ++ " arcs, " ++ U32.show(bad) ++ " bad")
+    done : G.Tally <- Fold.file(~G.Tally, ~G.Turn.place.step, path, Nat.mul(arcs, 12n), Chunk.turns(), G.Tally{G.Sum.run(g, nodes), n, 0, 0, 0})
+    out : Loaded <- Load.placed(done, path, nodes, arcs, junctions, directions)
+    return out
+
+def Load.turns(w: G.Ways, +folder: String, +junctions: Nat, +edges: Nat) -> IO(Loaded):
+  G.Ways{+seen, +directions} = w
+  +path = folder ++ "/turns.bin"
+  do IO<Loaded>:
+    Need(Nat.is_eq(U32.to_nat(seen), edges), folder ++ "/edges.bin: read " ++ U32.show(seen) ++ " of " ++ Nat.show(edges) ++ " edges")
+    +bytes : Nat <- Size.file(path)
+    +arcs : Nat = Nat.div(bytes, 12n)
+    +nodes : Nat = Nat.add(U32.to_nat(directions), Nat.mul(2n, junctions))
+    t : G.Tally <- Fold.file(~G.Tally, ~G.Turn.count.step, path, bytes, Chunk.turns(), G.Tally{[0 : U32^G.Size.depth(32n, False{}, G.Size.turns(nodes, arcs), 0n)], U32.from_nat(nodes), 0, 0, 0})
+    out : Loaded <- Load.counted(t, path, nodes, arcs, junctions, U32.to_nat(directions))
     return out
 
 def Load.graph(+folder: String) -> IO(Loaded):
-  +path = folder ++ "/edges.bin"
   do IO<Loaded>:
     +raw : Nat <- Size.file(folder ++ "/nodes.bin")
-    +bytes : Nat <- Size.file(path)
-    +nodes : Nat = Nat.div(raw, 8n)
-    +edges : Nat = Nat.div(bytes, 24n)
-    t : G.Tally <- Fold.file(~G.Tally, ~G.Count.step, path, bytes, Chunk.edges(), G.Tally{[0 : U32^G.Size.depth(32n, False{}, G.Size.graph(nodes, edges), 0n)], U32.from_nat(nodes), 0, 0, 0})
-    out : Loaded <- Load.counted(t, path, nodes, edges)
+    +bytes : Nat <- Size.file(folder ++ "/edges.bin")
+    w : G.Ways <- Fold.file(~G.Ways, ~G.Ways.step, folder ++ "/edges.bin", bytes, Chunk.edges(), G.Ways{0, 0})
+    out : Loaded <- Load.turns(w, folder, Nat.div(raw, 8n), Nat.div(bytes, 24n))
     return out
 
 # Every arc pushes at most one heap entry and every entry is popped once, and
@@ -189,18 +205,19 @@ def Lanes.go(t: L.Lanes, +ts: List<&2, U32>, +c: L.Cfg, +lanes: Nat, +t0: Nat) -
 def Bench.next(+x: U32) -> U32:
   U32.mod((x * 48271 : U32), 2147483647)
 
-def Bench.sources(k: Nat, +x: U32, +n: U32, acc: List<&2, U32>) -> List<&2, U32>:
+# Random junctions' depart nodes.
+def Bench.sources(k: Nat, +x: U32, +n: U32, +base: U32, acc: List<&2, U32>) -> List<&2, U32>:
   match k:
     case 0n:
       List.reverse(&2, U32, acc)
     case 1n+p:
       +y = Bench.next(x)
-      Bench.sources(p, y, n, U32.mod(y, n) <> acc)
+      Bench.sources(p, y, n, base, (base + U32.mod(y, n) : U32) <> acc)
 
 def Bench.run(l: Loaded, +searches: Nat, +limit: Nat, +depth: Nat) -> IO(Unit):
-  Loaded{g, +nodes, +arcs, +graph} = l
+  Loaded{g, +nodes, +arcs, +graph, +junctions, +directions} = l
   +c = Graph.config(nodes, arcs, limit)
-  +xs = Bench.sources(searches, 7919, L.Cfg.n(c), Nil{})
+  +xs = Bench.sources(searches, 7919, U32.from_nat(junctions), U32.from_nat(directions), Nil{})
   do IO<Unit>:
     Budget.check(depth, graph, L.Cfg.depth(c))
     +t0 : Nat <- IO.now()
@@ -295,13 +312,23 @@ def Matrix.save(+path: String, +count: Nat, +rows: List<&2, L.Row>) -> IO(Unit):
     f3 : File <- Matrix.write(rows, f2)
     File.close(f3)
 
-def Matrix.run(l: Loaded, +nodes: List<&2, U32>, +out: String, +limit: Nat, +depth: Nat) -> IO(Unit):
-  Loaded{g, +count, +arcs, +graph} = l
+def Offset.all(xs: List<&2, U32>, +k: U32) -> List<&2, U32>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case +x <> t:
+      (x + k : U32) <> Offset.all(t, k)
+
+# Trips leave from each stop's depart node and reach each stop's arrive node.
+def Matrix.run(l: Loaded, +stops: List<&2, U32>, +out: String, +limit: Nat, +depth: Nat) -> IO(Unit):
+  Loaded{g, +count, +arcs, +graph, +junctions, +directions} = l
   +c = Graph.config(count, arcs, limit)
+  +nodes = Offset.all(stops, U32.from_nat(directions))
+  +ends = Offset.all(stops, U32.from_nat(Nat.add(directions, junctions)))
   do IO<Unit>:
     Budget.check(depth, graph, L.Cfg.depth(c))
     +t0 : Nat <- IO.now()
-    +rows : List<&2, L.Row> <- Lanes.go(L.Lanes.make(depth, g, nodes), nodes, c, Nat.pow(2n, depth), t0)
+    +rows : List<&2, L.Row> <- Lanes.go(L.Lanes.make(depth, g, nodes), ends, c, Nat.pow(2n, depth), t0)
     Matrix.save(out, List.length(&2, U32, nodes), rows)
     +t1 : Nat <- IO.now()
     IO.print("matrix written in " ++ Nat.show(Nat.sub(t1, t0)) ++ "ms")
@@ -330,12 +357,12 @@ def Matrix.grid(b: Sn.Build, +p: Points, l: Loaded, +out: String, +limit: Nat, +
 
 def Matrix.loaded(l: Loaded, +folder: String, +points: String, +out: String, +limit: Nat, +depth: Nat) -> IO(Unit):
   match l:
-    case Loaded{g, +nodes, +arcs, +graph}:
+    case Loaded{g, +nodes, +arcs, +graph, +junctions, +directions}:
       do IO<Unit>:
         +t0 : Nat <- IO.now()
-        b : Sn.Build <- Near.load(folder, nodes)
+        b : Sn.Build <- Near.load(folder, junctions)
         +p : Points <- Matrix.points(points)
-        Matrix.grid(b, p, Loaded{g, nodes, arcs, graph}, out, limit, depth, t0)
+        Matrix.grid(b, p, Loaded{g, nodes, arcs, graph, junctions, directions}, out, limit, depth, t0)
 
 def Matrix.start(+folder: String, +points: String, +out: String, +limit: Nat, +depth: Nat) -> IO(Unit):
   do IO<Unit>:

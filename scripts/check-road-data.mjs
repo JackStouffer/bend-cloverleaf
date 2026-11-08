@@ -18,7 +18,8 @@ function check(folder) {
   const nodeCount = nodes.length / 2;
   const edgeCount = edges.length / 6;
   const pointCount = shapes.length / 2;
-  const problems = { nodes: 0, references: 0, shapes: 0, ends: 0 };
+  const turns = load(path.join(folder, "turns.bin"), Uint32Array);
+  const problems = { nodes: 0, references: 0, shapes: 0, ends: 0, turns: 0 };
 
   for (let i = 0; i < nodeCount; i++) {
     if (nodes[2 * i] === 0) problems.nodes++;
@@ -42,6 +43,22 @@ function check(folder) {
       if (!sameAs(next - 1, to)) problems.ends++;
     }
   }
+  // The turn graph numbers roads by direction first, then a depart and an
+  // arrive node per junction, and links each junction's two directly.
+  let directions = 0;
+  for (let e = 0; e < edgeCount; e++) {
+    directions += edges[6 * e + 4] & 16 ? 1 : 2;
+  }
+  const total = directions + 2 * nodeCount;
+  let links = 0;
+  for (let i = 0; i < turns.length; i += 3) {
+    const from = turns[i];
+    const to = turns[i + 1];
+    if (from >= total || to >= total) problems.turns++;
+    const depart = from >= directions && from < directions + nodeCount;
+    if (depart && to === from + nodeCount) links++;
+  }
+  problems.turns += Math.abs(links - nodeCount);
   return { nodeCount, edgeCount, pointCount, problems };
 }
 

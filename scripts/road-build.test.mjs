@@ -52,13 +52,25 @@ function dataBlock(strings, group) {
   return block("OSMData", Buffer.concat([bytes(1, table), bytes(2, group)]));
 }
 
+// Nodes with a `tags` object get them as dense key and value string numbers.
 function nodesBlock(nodes) {
+  const strings = [""];
+  const index = (text) => {
+    if (!strings.includes(text)) strings.push(text);
+    return strings.indexOf(text);
+  };
+  const tagged = nodes.some((n) => n.tags);
+  const keysVals = nodes.flatMap((n) => [
+    ...Object.entries(n.tags ?? {}).flatMap(([k, v]) => [index(k), index(v)]),
+    0,
+  ]);
   const dense = Buffer.concat([
     packed(1, deltas(nodes.map((n) => n.id))),
     packed(8, deltas(nodes.map((n) => n.lat))),
     packed(9, deltas(nodes.map((n) => n.lon))),
+    ...(tagged ? [packed(10, keysVals)] : []),
   ]);
-  return dataBlock([""], bytes(2, dense));
+  return dataBlock(strings, bytes(2, dense));
 }
 
 function waysBlock(ways) {
@@ -110,6 +122,7 @@ function run(blocks) {
       nodes: words(path.join(dir, "nodes.bin"), 2),
       edges: words(path.join(dir, "edges.bin"), 6),
       shapes: words(path.join(dir, "shapes.bin"), 2),
+      turning: words(path.join(dir, "turning.bin"), 2),
       leftovers: fs.readdirSync(dir).filter((name) => name.startsWith(".")),
     };
   } finally {
@@ -234,6 +247,31 @@ test("leaves out private roads unless cars are let back in", () => {
   assert.equal(edges.length, 1);
 });
 
+test("adds a traffic signal part way along a road to its time", () => {
+  const signal = (tags) => [
+    nodesBlock([nodes[0], nodes[1], { ...nodes[3], tags }]),
+    waysBlock([{ tags: { highway: "residential" }, refs: [a, shapePoint, b] }]),
+  ];
+  const both = run(signal({ highway: "traffic_signals" })).turning[0][1];
+  assert.equal(both & 65535, 20);
+  assert.equal(both >>> 16, 20);
+  const one = run(
+    signal({
+      highway: "traffic_signals",
+      "traffic_signals:direction": "forward",
+    }),
+  ).turning[0][1];
+  assert.equal(one & 65535, 20);
+  assert.equal(one >>> 16, 0);
+});
+
+test("records which way a road leaves and reaches its junctions", () => {
+  const { turning } = run(map());
+  // The residential road runs due north.
+  assert.equal(turning[0][0] & 511, 0);
+  assert.equal((turning[0][0] >>> 9) & 511, 0);
+});
+
 test("drops an edge whose end has no node, and counts the gap", () => {
   const { result, edges } = run([
     nodesBlock(nodes.slice(0, 2)),
@@ -284,11 +322,13 @@ function statesRun(marginKm) {
         ]),
       ]),
     );
-    const result = buildStates(pbf, outlines, dir, marginKm);
+    // Four stops make a tiny graph, so keep pieces of any size.
+    const result = buildStates(pbf, outlines, dir, marginKm, 1);
     const read = (state) => ({
       nodes: words(path.join(dir, state, "nodes.bin"), 2),
       edges: words(path.join(dir, state, "edges.bin"), 6),
       shapes: words(path.join(dir, state, "shapes.bin"), 2),
+      turns: words(path.join(dir, state, "turns.bin"), 3),
     });
     return {
       result,
@@ -342,4 +382,14 @@ test("reports every state and leaves no national files behind", () => {
     folders.filter((name) => name.startsWith(".")),
     [],
   );
+});
+
+test("writes a turn graph with depart and arrive nodes for each junction", () => {
+  // Three junctions in a line: 4 roads by direction, a depart and an arrive arc
+  // for each, a depart-to-arrive arc per junction, 2 turns through the middle
+  // and a U-turn at each dead end.
+  const { north, result } = statesRun(40);
+  assert.equal(north.turns.length, 4 + 4 + 3 + 2 + 2);
+  assert.equal(result.states.north.turns, 15);
+  assert.ok(north.turns.every(([from, to]) => from < 4 + 6 && to < 4 + 6));
 });

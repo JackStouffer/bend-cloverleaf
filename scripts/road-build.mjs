@@ -1,5 +1,8 @@
 // Turns an OpenStreetMap .pbf into fixed-size road records for the Bend road
-// pipeline. Runs before deploy, with no dependencies beyond Node 24.
+// pipeline. Runs before deploy, with no dependencies beyond Node 24. This
+// header is the definition of the road data format: everything that reads the
+// files, Bend included, follows it. To rebuild the data from scratch, run
+// rebuild-road-data.mjs, which fetches the inputs and calls this.
 //
 //   node scripts/road-build.mjs <file.osm.pbf> <outlines folder> <output folder>
 //
@@ -13,20 +16,50 @@
 // drive between two in-state stops can be wrong or impossible.
 //
 // Output is little-endian U32 words, and every file stays under 4GB so that
-// Bend can read it with File.read_at. Each state has three files, numbered on
+// Bend can read it with File.read_at. Each state has four files, numbered on
 // their own:
 //
 //   nodes.bin   2 words per junction: lat, lon, as int32 degrees * 1e7
 //   edges.bin   6 words per edge: from, to, meters, deciseconds, flags, shape
 //   shapes.bin  2 words per point: lat, lon, in travel order
+//   turns.bin   3 words per arc of the turn graph: from, to, deciseconds
 //
-// `from` and `to` are indexes into nodes.bin. `shape` is the index in
-// shapes.bin of the edge's first point, and its last point is just before the
-// next edge's `shape`. In `flags`, bits 0-3 are an index into ROAD_CLASSES and
-// bit 4 means the edge is one-way, from `from` to `to`.
+// In edges.bin, `from` and `to` are indexes into nodes.bin. `shape` is the
+// index in shapes.bin of the edge's first point, and its last point is just
+// before the next edge's `shape`. In `flags`, bits 0-3 are an index into
+// ROAD_CLASSES and bit 4 means the edge is one-way, from `from` to `to`.
+// `deciseconds` is the drive along the road alone.
+//
+// turns.bin is the graph searches run on. With n junctions and D roads by
+// direction, its nodes are:
+//
+//   0 to D - 1           each edge in order, forwards, then backwards right
+//                        after it if it's two-way
+//   D + v                junction v's depart node
+//   D + n + v            junction v's arrive node
+//
+// A trip from junction a to junction b runs from D + a to D + n + b. A depart
+// node has an arc onto each road leaving its junction, costing that road, and
+// an arc to its own arrive node costing nothing. Each road entering a junction
+// has an arc to its arrive node costing nothing, and an arc onto each road it
+// can turn into, costing the turn, any obstacle at the junction, and the next
+// road. A road's cost includes signal, stop and give-way delays part way along
+// it. road-turns.mjs works the costs out, following OSRM's car profile.
+//
+// Pieces of a state's graph under SMALL_COMPONENT junctions that can't reach
+// the rest, or be reached from it, are left out of all four files.
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
+import {
+  Column,
+  SMALL_COMPONENT,
+  bearing,
+  keptNodes,
+  obstacleOf,
+  passingDelay,
+  writeTurns,
+} from "./road-turns.mjs";
 
 // Service roads stay out of the routing graph. Speeds are km/h, used when a
 // way has no usable maxspeed tag. They're OSRM's car profile defaults, as is
@@ -68,10 +101,17 @@ const MAX_U32 = 2 ** 32 - 1;
 const NONE = MAX_U32;
 const EARTH_METERS = 6371008.8;
 const ONE_WAY_FLAG = 1 << 4;
+// Marks a way stored against its drawn order, which obstacles' directions use.
+const REVERSED_FLAG = 1 << 5;
 const GRID_DEGREES = 0.02;
 const KM_PER_DEGREE = 111.2;
 const EDGE_WORDS = 6;
 const EDGE_CHUNK = 2 ** 16;
+const TURNING_WORDS = 2;
+const MAX_JUNCTIONS = 2 ** 26;
+// A bearing comes from the first point at least this far along the road, so a
+// kink at the junction doesn't count as a turn.
+const BEARING_METERS = 10;
 
 // How far a state's road graph runs past its border. Against a graph of the
 // whole South, 20km left Georgia trips up to 26 minutes too slow, and 40km
@@ -236,21 +276,46 @@ function readWay(data, strings, start, end, keys, values, refs, onWay) {
   onWay(refs, tags);
 }
 
-function readNodes(data, start, end, scale, onNode) {
-  const from = [0, 0, 0];
-  const to = [0, 0, 0];
+// Dense nodes keep their tags as one run of key and value string numbers, with
+// a 0 after each node's tags. Only obstacles matter here.
+function readNodes(data, start, end, scale, strings, onNode) {
+  const from = [0, 0, 0, 0];
+  const to = [0, 0, 0, 0];
   fields(data, start, end, (field, _, a, b) => {
-    const i = field === 1 ? 0 : field === 8 ? 1 : field === 9 ? 2 : -1;
+    const i =
+      field === 1
+        ? 0
+        : field === 8
+          ? 1
+          : field === 9
+            ? 2
+            : field === 10
+              ? 3
+              : -1;
     if (i >= 0) {
       from[i] = a;
       to[i] = b;
     }
   });
-  let [ids, lats, lons] = from;
+  let [ids, lats, lons, tagsAt] = from;
+  const tagsEnd = to[3];
+  const tags = new Map();
   let id = 0;
   let lat = 0;
   let lon = 0;
   while (ids < to[0]) {
+    let code = 0;
+    if (tagsAt < tagsEnd) {
+      tags.clear();
+      at = tagsAt;
+      for (;;) {
+        const k = varint(data);
+        if (k === 0) break;
+        tags.set(strings[k], strings[varint(data)]);
+      }
+      tagsAt = at;
+      if (tags.size > 0) code = obstacleOf(tags);
+    }
     at = ids;
     id += zigzag(varint(data));
     ids = at;
@@ -264,6 +329,7 @@ function readNodes(data, start, end, scale, onNode) {
       id,
       Math.floor((scale.latOffset + lat * scale.granularity) / 100),
       Math.floor((scale.lonOffset + lon * scale.granularity) / 100),
+      code,
     );
   }
 }
@@ -291,7 +357,7 @@ function readBlock(data, onWay, onNode) {
       if (field === 3 && onWay) {
         readWay(data, strings, a, b, keys, values, refs, onWay);
       }
-      if (field === 2 && onNode) readNodes(data, a, b, scale, onNode);
+      if (field === 2 && onNode) readNodes(data, a, b, scale, strings, onNode);
     });
   }
 }
@@ -437,7 +503,9 @@ function waysPass(pbfPath, temp) {
         }
         const oneWay = tags.direction === 0 ? 0 : ONE_WAY_FLAG;
         ways[wayCount * 2] = position;
-        ways[wayCount * 2 + 1] = tags.road | oneWay | (tags.speed << 5);
+        const reversed = tags.direction < 0 ? REVERSED_FLAG : 0;
+        ways[wayCount * 2 + 1] =
+          tags.road | oneWay | reversed | (tags.speed << 6);
         wayCount++;
         for (let i = 0; i < way.length; i++) {
           const partition = Math.floor(way[i] / ID_SPAN);
@@ -459,7 +527,8 @@ function waysPass(pbfPath, temp) {
 // one partition is ever active. Each junction's number is its partition's base
 // plus its rank, which replaces OSM IDs with compact U32s.
 function nodesPass(pbfPath, temp, nodesFile, starts) {
-  const coords = new PartitionSink(`${temp}/coords`, 4);
+  const coords = new PartitionSink(`${temp}/coords`, 5);
+  const obstacles = new Uint8Array(MAX_JUNCTIONS);
   const partitions = fs
     .readdirSync(`${temp}/refs`)
     .map(Number)
@@ -469,6 +538,7 @@ function nodesPass(pbfPath, temp, nodesFile, starts) {
   const seenRanks = new Uint32Array(BITMAP_WORDS + 1);
   const junctionRanks = new Uint32Array(BITMAP_WORDS + 1);
   const places = new Int32Array(ID_SPAN * 2);
+  const kinds = new Uint8Array(ID_SPAN);
   const records = new Uint32Array(ID_SPAN * 8);
   let junctions = 0;
   let missing = 0;
@@ -488,6 +558,7 @@ function nodesPass(pbfPath, temp, nodesFile, starts) {
     fillRanks(seen, seenRanks);
     fillRanks(junction, junctionRanks);
     places.fill(0, 0, seenRanks[BITMAP_WORDS] * 2);
+    kinds.fill(0, 0, seenRanks[BITMAP_WORDS]);
     current = partition;
   };
 
@@ -497,6 +568,11 @@ function nodesPass(pbfPath, temp, nodesFile, starts) {
         const x = word * 32 + (31 - Math.clz32(bits & -bits));
         const slot = rankOf(seen, seenRanks, x) * 2;
         nodesFile.put(places[slot], places[slot + 1]);
+        if (junctions + rankOf(junction, junctionRanks, x) >= MAX_JUNCTIONS) {
+          throw new Error("too many junctions");
+        }
+        obstacles[junctions + rankOf(junction, junctionRanks, x)] =
+          kinds[slot / 2];
       }
     }
     const count = loadWords(`${temp}/refs/${current}`, records);
@@ -511,6 +587,7 @@ function nodesPass(pbfPath, temp, nodesFile, starts) {
       entry.words[entry.used++] = hasBit(junction, x)
         ? junctions + rankOf(junction, junctionRanks, x)
         : NONE;
+      entry.words[entry.used++] = kinds[slot / 2];
     }
     junctions += junctionRanks[BITMAP_WORDS];
     fs.rmSync(`${temp}/refs/${current}`);
@@ -530,7 +607,7 @@ function nodesPass(pbfPath, temp, nodesFile, starts) {
 
   for (const data of dataBlocks(pbfPath)) {
     let nodes = 0;
-    readBlock(data, null, (id, lat, lon) => {
+    readBlock(data, null, (id, lat, lon, code) => {
       nodes++;
       if (id <= lastId) throw new Error(".pbf nodes aren't sorted by ID");
       lastId = id;
@@ -542,12 +619,13 @@ function nodesPass(pbfPath, temp, nodesFile, starts) {
       const slot = rankOf(seen, seenRanks, x) * 2;
       places[slot] = lat;
       places[slot + 1] = lon;
+      kinds[slot / 2] = code;
     });
     if (nodes === 0) break; // Sorted by type, so no more nodes can follow.
   }
   advance(Infinity);
   coords.close();
-  return { junctions, missing };
+  return { junctions, missing, obstacles: obstacles.subarray(0, junctions) };
 }
 
 function haversine(lat1, lon1, lat2, lon2) {
@@ -564,13 +642,16 @@ function haversine(lat1, lon1, lat2, lon2) {
 
 // Pass 3: a position is a direct index, so each partition loads with no sort.
 // Partitions start at a way boundary, so no way crosses two of them.
-function edgesPass(temp, first, edgesFile, shapesFile) {
+function edgesPass(temp, first, edgesFile, shapesFile, turningFile) {
   const { ways, wayCount, starts, position } = first;
   const size = POSITION_SPAN + LONGEST_WAY;
-  const records = new Uint32Array(size * 4);
+  const records = new Uint32Array(size * 5);
   const lats = new Int32Array(size);
   const lons = new Int32Array(size);
   const numbers = new Uint32Array(size);
+  const kinds = new Uint8Array(size);
+  const along = new Uint32Array(LONGEST_WAY);
+  const meters = new Float64Array(LONGEST_WAY);
   let edges = 0;
   let points = 0;
   let way = 0;
@@ -578,25 +659,50 @@ function edgesPass(temp, first, edgesFile, shapesFile) {
   const emit = (from, to, tags) => {
     if (lats[from] === 0 || lats[to] === 0) return;
     const shape = points;
-    let meters = 0;
+    const reversed = (tags & REVERSED_FLAG) !== 0;
     let previous = from;
+    let count = 0;
+    let forward = 0;
+    let backward = 0;
+    along[count] = from;
+    meters[count++] = 0;
     shapesFile.put(lats[from], lons[from]);
     points++;
     for (let i = from + 1; i <= to; i++) {
       if (lats[i] === 0) continue;
-      meters += haversine(lats[previous], lons[previous], lats[i], lons[i]);
+      meters[count] =
+        meters[count - 1] +
+        haversine(lats[previous], lons[previous], lats[i], lons[i]);
+      along[count++] = i;
       shapesFile.put(lats[i], lons[i]);
       points++;
       previous = i;
+      if (i < to) {
+        forward += passingDelay(kinds[i], !reversed);
+        backward += passingDelay(kinds[i], reversed);
+      }
     }
-    const speed = tags >>> 5;
+    const length = meters[count - 1];
+    let out = 1;
+    while (out < count - 1 && meters[out] < BEARING_METERS) out++;
+    let back = count - 2;
+    while (back > 0 && length - meters[back] < BEARING_METERS) back--;
+    const p = along[out];
+    const q = along[back];
+    const leaving = bearing(lats[from], lons[from], lats[p], lons[p]);
+    const arriving = bearing(lats[q], lons[q], lats[to], lons[to]);
+    const speed = tags >>> 6;
     edgesFile.put(
       numbers[from],
       numbers[to],
-      Math.max(1, Math.round(meters)),
-      Math.max(1, Math.round((meters / speed) * 36)),
+      Math.max(1, Math.round(length)),
+      Math.max(1, Math.round((length / speed) * 36)),
       tags & 31,
       shape,
+    );
+    turningFile.put(
+      leaving | (arriving << 9) | ((reversed ? 1 : 0) << 18),
+      Math.min(forward, 65535) | (Math.min(backward, 65535) << 16),
     );
     edges++;
   };
@@ -604,11 +710,12 @@ function edgesPass(temp, first, edgesFile, shapesFile) {
   for (let q = 0; q < starts.length; q++) {
     const count = loadWords(`${temp}/coords/${q}`, records);
     const base = starts[q];
-    for (let i = 0; i < count; i += 4) {
+    for (let i = 0; i < count; i += 5) {
       const slot = records[i] - base;
       lats[slot] = records[i + 1];
       lons[slot] = records[i + 2];
       numbers[slot] = records[i + 3];
+      kinds[slot] = records[i + 4];
     }
     const end = q + 1 < starts.length ? starts[q + 1] : position;
     for (; way < wayCount && ways[way * 2] < end; way++) {
@@ -632,14 +739,17 @@ export function build(pbfPath, outDir) {
   const nodesFile = new OutputFile(`${outDir}/nodes.bin`);
   const edgesFile = new OutputFile(`${outDir}/edges.bin`);
   const shapesFile = new OutputFile(`${outDir}/shapes.bin`);
+  const turningFile = new OutputFile(`${outDir}/turning.bin`);
 
   const first = waysPass(pbfPath, temp);
   const second = nodesPass(pbfPath, temp, nodesFile, first.starts);
-  const third = edgesPass(temp, first, edgesFile, shapesFile);
+  const third = edgesPass(temp, first, edgesFile, shapesFile, turningFile);
 
   nodesFile.close();
   edgesFile.close();
   shapesFile.close();
+  turningFile.close();
+  fs.writeFileSync(`${outDir}/obstacles.bin`, second.obstacles);
   fs.rmSync(temp, { recursive: true, force: true });
   return {
     ways: first.wayCount,
@@ -770,86 +880,180 @@ function loadInts(path) {
   return words;
 }
 
-// Yields edges a chunk at a time, each chunk ending with one extra record so
-// that an edge can see where the next edge's shape starts.
-function* edgeChunks(fd, total) {
-  const words = new Uint32Array((EDGE_CHUNK + 1) * EDGE_WORDS);
+// Yields records of `width` words a chunk at a time, each chunk ending with one
+// extra record so that an edge can see where the next edge's shape starts.
+function* chunks(fd, total, width) {
+  const words = new Uint32Array((EDGE_CHUNK + 1) * width);
   const view = new Uint8Array(words.buffer);
   for (let first = 0; first < total; first += EDGE_CHUNK) {
     const count = Math.min(EDGE_CHUNK, total - first);
     const extra = first + count < total ? 1 : 0;
-    const bytes = (count + extra) * EDGE_WORDS * 4;
-    fs.readSync(fd, view, 0, bytes, first * EDGE_WORDS * 4);
+    fs.readSync(fd, view, 0, (count + extra) * width * 4, first * width * 4);
     yield { words, count, last: extra === 0 };
   }
 }
 
-function splitState(national, stateDir, grid, local) {
-  const { nodes, nodesPath, edgesPath, shapesPath } = national;
-  fs.mkdirSync(stateDir, { recursive: true });
-  const nodesFile = new OutputFile(`${stateDir}/nodes.bin`);
-  const edgesFile = new OutputFile(`${stateDir}/edges.bin`);
-  const shapesFile = new OutputFile(`${stateDir}/shapes.bin`);
-  let nodeCount = 0;
-  for (let i = 0; i < nodes.length; i += 2) {
-    const keep = grid.covers(nodes[i], nodes[i + 1]);
-    local[i / 2] = keep ? nodeCount++ : NONE;
-    if (keep) nodesFile.put(nodes[i], nodes[i + 1]);
-  }
-  const edgesFd = fs.openSync(edgesPath, "r");
-  const shapesFd = fs.openSync(shapesPath, "r");
-  const totalPoints = fs.fstatSync(shapesFd).size / 8;
-  const totalEdges = fs.fstatSync(edgesFd).size / (EDGE_WORDS * 4);
-  let buffer = Buffer.alloc(LONGEST_WAY * 8);
-  let edgeCount = 0;
-  let points = 0;
-  for (const { words, count, last } of edgeChunks(edgesFd, totalEdges)) {
+// One state's edges, gathered so that its cut-off pieces can be found before
+// anything is written.
+function stateEdges(national, local) {
+  const edgesFd = fs.openSync(national.edgesPath, "r");
+  const turningFd = fs.openSync(national.turningPath, "r");
+  const totalPoints = fs.statSync(national.shapesPath).size / 8;
+  const total = fs.fstatSync(edgesFd).size / (EDGE_WORDS * 4);
+  const columns = [
+    "from",
+    "to",
+    "meters",
+    "deciseconds",
+    "flags",
+    "start",
+    "end",
+    "turning",
+    "delays",
+  ];
+  const edges = Object.fromEntries(columns.map((c) => [c, new Column()]));
+  const turning = chunks(turningFd, total, TURNING_WORDS);
+  for (const { words, count, last } of chunks(edgesFd, total, EDGE_WORDS)) {
+    const turns = turning.next().value.words;
     for (let e = 0; e < count; e++) {
       const at = e * EDGE_WORDS;
       const from = local[words[at]];
       const to = local[words[at + 1]];
       if (from === NONE || to === NONE) continue;
-      const start = words[at + 5];
-      const end =
-        last && e === count - 1 ? totalPoints : words[at + EDGE_WORDS + 5];
-      const size = (end - start) * 8;
-      if (size > buffer.length) buffer = Buffer.alloc(size);
-      fs.readSync(shapesFd, buffer, 0, size, start * 8);
-      shapesFile.putBytes(buffer.subarray(0, size));
-      edgesFile.put(
-        from,
-        to,
-        words[at + 2],
-        words[at + 3],
-        words[at + 4],
-        points,
+      edges.from.push(from);
+      edges.to.push(to);
+      edges.meters.push(words[at + 2]);
+      edges.deciseconds.push(words[at + 3]);
+      edges.flags.push(words[at + 4]);
+      edges.start.push(words[at + 5]);
+      edges.end.push(
+        last && e === count - 1 ? totalPoints : words[at + EDGE_WORDS + 5],
       );
-      points += end - start;
-      edgeCount++;
+      edges.turning.push(turns[e * TURNING_WORDS]);
+      edges.delays.push(turns[e * TURNING_WORDS + 1]);
     }
   }
   fs.closeSync(edgesFd);
+  fs.closeSync(turningFd);
+  const data = Object.fromEntries(columns.map((c) => [c, edges[c].data]));
+  return { ...data, count: edges.from.length };
+}
+
+// The same edges, as road-turns.mjs reads them.
+function edgeView(e, number) {
+  return {
+    count: e.count,
+    from: (k) => number(e.from[k]),
+    to: (k) => number(e.to[k]),
+    twoWay: (k) => (e.flags[k] & ONE_WAY_FLAG) === 0,
+    deciseconds: (k) => e.deciseconds[k],
+    speed: (k) => e.meters[k] / e.deciseconds[k],
+    leaving: (k) => e.turning[k] & 511,
+    arriving: (k) => (e.turning[k] >>> 9) & 511,
+    reversed: (k) => ((e.turning[k] >>> 18) & 1) === 1,
+    delay: (k, back) => (back ? e.delays[k] >>> 16 : e.delays[k] & 65535),
+  };
+}
+
+function splitState(national, stateDir, grid, local, least) {
+  const { nodes, obstacles, shapesPath } = national;
+  let candidates = 0;
+  for (let i = 0; i < nodes.length; i += 2) {
+    local[i / 2] = grid.covers(nodes[i], nodes[i + 1]) ? candidates++ : NONE;
+  }
+  const e = stateEdges(national, local);
+  const { renumber, kept } = keptNodes(
+    candidates,
+    edgeView(e, (v) => v),
+    least,
+    NONE,
+  );
+
+  fs.mkdirSync(stateDir, { recursive: true });
+  const nodesFile = new OutputFile(`${stateDir}/nodes.bin`);
+  const edgesFile = new OutputFile(`${stateDir}/edges.bin`);
+  const shapesFile = new OutputFile(`${stateDir}/shapes.bin`);
+  const turnsFile = new OutputFile(`${stateDir}/turns.bin`);
+  const codes = new Uint8Array(kept);
+  for (let i = 0; i < nodes.length; i += 2) {
+    const c = local[i / 2];
+    if (c === NONE || renumber[c] === NONE) continue;
+    nodesFile.put(nodes[i], nodes[i + 1]);
+    codes[renumber[c]] = obstacles[i / 2];
+  }
+
+  const shapesFd = fs.openSync(shapesPath, "r");
+  let buffer = Buffer.alloc(LONGEST_WAY * 8);
+  const keptEdges = new Uint32Array(e.count);
+  let edgeCount = 0;
+  let points = 0;
+  for (let k = 0; k < e.count; k++) {
+    const from = renumber[e.from[k]];
+    const to = renumber[e.to[k]];
+    if (from === NONE || to === NONE) continue;
+    const size = (e.end[k] - e.start[k]) * 8;
+    if (size > buffer.length) buffer = Buffer.alloc(size);
+    fs.readSync(shapesFd, buffer, 0, size, e.start[k] * 8);
+    shapesFile.putBytes(buffer.subarray(0, size));
+    edgesFile.put(from, to, e.meters[k], e.deciseconds[k], e.flags[k], points);
+    points += e.end[k] - e.start[k];
+    keptEdges[edgeCount++] = k;
+  }
   fs.closeSync(shapesFd);
+
+  const view = edgeView(e, (v) => renumber[v]);
+  const turns = writeTurns(
+    kept,
+    {
+      ...view,
+      count: edgeCount,
+      from: (j) => view.from(keptEdges[j]),
+      to: (j) => view.to(keptEdges[j]),
+      twoWay: (j) => view.twoWay(keptEdges[j]),
+      deciseconds: (j) => view.deciseconds(keptEdges[j]),
+      speed: (j) => view.speed(keptEdges[j]),
+      leaving: (j) => view.leaving(keptEdges[j]),
+      arriving: (j) => view.arriving(keptEdges[j]),
+      reversed: (j) => view.reversed(keptEdges[j]),
+      delay: (j, back) => view.delay(keptEdges[j], back),
+    },
+    (v) => codes[v],
+    (from, to, cost) => turnsFile.put(from, to, cost),
+  );
   nodesFile.close();
   edgesFile.close();
   shapesFile.close();
+  turnsFile.close();
   return {
-    nodes: nodeCount,
+    nodes: kept,
+    dropped: candidates - kept,
     edges: edgeCount,
+    turns: turns.arcs,
     points,
-    bytes: nodesFile.bytes + edgesFile.bytes + shapesFile.bytes,
+    bytes:
+      nodesFile.bytes + edgesFile.bytes + shapesFile.bytes + turnsFile.bytes,
   };
 }
 
 // Pass 4: one state at a time, so memory is one lookup table however many
-// states there are. A road near a border lands in both states' files.
-export function splitStates(nationalDir, outlinesDir, outDir, marginKm) {
+// states there are. A road near a border lands in both states' files. Pieces
+// smaller than `least` nodes that can't reach the rest, or be reached from it,
+// are dropped.
+export function splitStates(
+  nationalDir,
+  outlinesDir,
+  outDir,
+  marginKm,
+  least = SMALL_COMPONENT,
+) {
   const nodes = loadInts(`${nationalDir}/nodes.bin`);
   const local = new Uint32Array(nodes.length / 2);
   const national = {
     nodes,
+    obstacles: fs.readFileSync(`${nationalDir}/obstacles.bin`),
     edgesPath: `${nationalDir}/edges.bin`,
     shapesPath: `${nationalDir}/shapes.bin`,
+    turningPath: `${nationalDir}/turning.bin`,
   };
   const states = {};
   for (const file of fs.readdirSync(outlinesDir).sort()) {
@@ -857,16 +1061,28 @@ export function splitStates(nationalDir, outlinesDir, outDir, marginKm) {
     const name = file.slice(0, -".poly".length);
     const rings = readRings(`${outlinesDir}/${file}`);
     const grid = new StateGrid(rings, marginKm);
-    states[name] = splitState(national, `${outDir}/${name}`, grid, local);
+    states[name] = splitState(
+      national,
+      `${outDir}/${name}`,
+      grid,
+      local,
+      least,
+    );
   }
   return states;
 }
 
-export function buildStates(pbfPath, outlinesDir, outDir, marginKm) {
+export function buildStates(
+  pbfPath,
+  outlinesDir,
+  outDir,
+  marginKm,
+  least = SMALL_COMPONENT,
+) {
   const nationalDir = `${outDir}/.road-build-national`;
   fs.mkdirSync(nationalDir, { recursive: true });
   const result = build(pbfPath, nationalDir);
-  const states = splitStates(nationalDir, outlinesDir, outDir, marginKm);
+  const states = splitStates(nationalDir, outlinesDir, outDir, marginKm, least);
   fs.rmSync(nationalDir, { recursive: true, force: true });
   return { ...result, states };
 }
@@ -892,7 +1108,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (const [name, state] of Object.entries(states)) {
     const megabytes = Math.round(state.bytes / 1e6);
     console.log(
-      `${name}: ${state.nodes} nodes, ${state.edges} edges, ${megabytes}MB`,
+      `${name}: ${state.nodes} nodes, ${state.edges} edges, ${state.turns} turns, ${state.dropped} dropped, ${megabytes}MB`,
     );
   }
   console.log({ ...result, seconds, peakMB: peak });

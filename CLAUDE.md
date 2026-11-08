@@ -27,13 +27,16 @@ Run the app from the repo root. Everything goes through nginx at https://localho
 ```bash
 docker compose up --build                                # real-world run with the built frontend
 docker compose -f compose.yaml -f compose.dev.yaml watch # development with hot reload
+node scripts/rebuild-road-data.mjs                        # fetch, build, check and swap in data/road, under a 1GB cap
 node scripts/fetch-road-data.mjs                          # download the US .pbf and state outlines to data/osm
 node scripts/road-build.mjs data/osm/us-latest.osm.pbf data/osm/outlines data/road  # build per-state road records
 node scripts/check-road-data.mjs data/road                # check the output against its format
 node --test "scripts/*.test.mjs"                         # test the Node scripts
 node scripts/check-road-matrix.mjs check data/road/texas points.bin matrix.bin 36000  # compare a matrix with a separate implementation
 node scripts/compare-osrm.mjs compare points.bin matrix.bin 36000 http://127.0.0.1:5000  # check drive times against OSRM
-docker compose run --rm road-build                       # fetch and build the road data in Compose, once Docker is here
+docker compose run --rm road-build                       # the same rebuild in Compose
+docker compose --profile road run --rm road bench /road/texas 100 36000 0  # the road image, with the cached data baked in
+docker build -f backend/Dockerfile --target road .       # a deployable road image, rebuilding the data from scratch
 ```
 
 Run these from `backend/`, and write build output to `backend/build/`:
@@ -91,7 +94,9 @@ npm run gen:api                       # regenerate openapi.json and the typed cl
 - `File.size` fails above 4GB and `File.read_at` takes a `U32` offset. Keep runtime data files under 4GB. Sequential reads work past 4GB.
 - The whole stack must run in 8GB, even though this machine has 15GB. Each service has a hard cap, listed in PLAN.md. Test against it with `systemd-run --user --scope -q -p MemoryMax=2G -p MemorySwapMax=0 <command>`.
 - Never load the whole road network into RAM. Stream it, or load one state at a time.
-- Each search lane copies the state's graph, so set lanes from the state's size. Texas fits 4 lanes under the 1GB `road` cap, not 8.
+- The header of `scripts/road-build.mjs` defines the road data format. Change the format there first, then the Bend loader, and rebuild the data with `scripts/rebuild-road-data.mjs`. Don't hand-edit or patch files in `data/road`.
+- The road data ships inside the `road` image. Local Compose builds copy the cached `data/road`, and a plain `docker build` rebuilds it from scratch. A fresh build needs about 30GB free on Docker's disk.
+- Each search lane copies the state's turn graph, so set lanes from the state's size. Texas and California fit one lane under the 1GB `road` cap, and `road` refuses more.
 - Bend's heap never shrinks, and freed memory is reused only at the same power-of-two size, so peak use per size lasts until exit. Use fixed-size arrays, reuse them, and give each batch pass its own process.
 - Bend has no heap limit, so going over a cap gets the process killed with no error, and with no cap a bad size can reboot the whole machine. Size every buffer and batch up front, and check any size that comes from outside before allocating.
 - Run compiled Bend under `systemd-run --user --scope -q -p MemoryMax=... -p MemorySwapMax=0`. Delete the old binary before rebuilding and use `set -o pipefail`, because `bend ... | tail` hides a failed build and leaves a stale binary to run.

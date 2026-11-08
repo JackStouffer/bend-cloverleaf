@@ -453,6 +453,37 @@ def ref.same(xs: List<&2, U32>, ys: List<&2, Nat>) -> Bool:
     case _ _:
       False{}
 
+# A turn graph straight from turns.bin records: 0 to 1 to 2 beats 0 to 2 direct.
+def turns.record(+from: U32, +to: U32, +cost: U32, t: List<&2, U32>) -> List<&2, U32>:
+  road.word(from, road.word(to, road.word(cost, t)))
+
+def turns.bytes() -> List<&2, U32>:
+  turns.record(0, 1, 5, turns.record(1, 2, 7, turns.record(0, 2, 20, turns.record(2, 3, 1, Nil{}))))
+
+def turns.placed(t: RG.Tally) -> Array<U32>:
+  match t:
+    case RG.Tally{g, _, _, +arcs, _}:
+      RG.Graph.head(g, 4, arcs)
+
+def turns.counted(t: RG.Tally) -> Array<U32>:
+  match t:
+    case RG.Tally{g, _, _, _, _}:
+      turns.placed(RG.Turn.placed(turns.bytes(), RG.Sum.run(g, 4n), 4, 0))
+
+def turns.graph() -> Array<U32>:
+  turns.counted(RG.Turn.counted(turns.bytes(), [0 : U32^5n], 4, 0, 0))
+
+def turns.time() -> List<&2, U32>:
+  road.cells(RL.Lanes.run(RL.Lanes.make(0n, turns.graph(), [0]), [3], RL.Cfg{4096n, 256n, 4n, 4, 16, 1000, 7n}))
+
+def turns.bad.of(t: RG.Tally) -> U32:
+  match t:
+    case RG.Tally{_, _, _, _, +bad}:
+      bad
+
+def turns.bad() -> U32:
+  turns.bad.of(RG.Turn.counted(turns.record(0, 9, 5, Nil{}), [0 : U32^5n], 4, 0, 0))
+
 def road_checks() -> List<&2, Check>:
   [Check{"the quicker way round beats the slow direct road", road.is(road.time(0, 2, 1000), 30)},
    Check{"a route chains roads", road.is(road.time(0, 3, 1000), 35)},
@@ -474,7 +505,9 @@ def road_checks() -> List<&2, Check>:
    Check{"a point with no road nearby snaps to nothing", Nat.is_eq(snap.best(snap.built(600000000)), RN.Far())},
    Check{"a tie goes to the lower numbered node", U32.is_eq(snap.node(snap.tie()), 0)},
    Check{"a search settles each node once", Nat.is_eq(RL.Row.settled(grid.row()), 64n)},
-   Check{"a search finds the shortest time to every node", ref.same(RL.Row.cells(grid.row()), ref.run(63n, ref.start()))}]
+   Check{"a search finds the shortest time to every node", ref.same(RL.Row.cells(grid.row()), ref.run(63n, ref.start()))},
+   Check{"a turn graph loads from its records", road.same(turns.time(), [13])},
+   Check{"a turn to a node past the last is counted as bad", U32.is_eq(turns.bad(), 1)}]
 
 def show(c: Check) -> String:
   match c:
