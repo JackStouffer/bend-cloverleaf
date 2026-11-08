@@ -213,8 +213,12 @@ def Rows.of(fuel: Nat, +depth: Nat, +size: Nat, +xs: List<&2, Line>) -> T.Rows:
 def of.lines(+floor: Nat, +depth: Nat, +lines: List<&2, Line>) -> T.Times:
   T.Times{floor, depth, Rows.of(depth, depth, List.length(&2, Line, lines), lines)}
 
+# A table from cells keyed by Point.key, in any order.
+def of.cells(+floor: Nat, cs: List<&2, Cell>) -> T.Times:
+  +sorted = List.sort(~Cell, ~Cell.le, cs)
+  of.lines(floor, 48n, List.reverse(&2, Line, group(sorted, Nil{})))
+
 # A table from any list of entries, in any order. Where a pair appears twice,
 # the lookup finds one of them.
 def of(+floor: Nat, es: List<&2, Entry>) -> T.Times:
-  +sorted = List.sort(~Cell, ~Cell.le, cells(es, Nil{}))
-  of.lines(floor, 48n, List.reverse(&2, Line, group(sorted, Nil{})))
+  of.cells(floor, cells(es, Nil{}))

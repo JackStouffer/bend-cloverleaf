@@ -15,6 +15,8 @@ import ./proof/rules.bend as PR
 import ./proof/events.bend as PE
 import ./proof/solve.bend as PS
 import ./proof/road.bend as PRo
+import ./proof/nation.bend as PN
+import ./core/nation.bend as N
 
 # Proves every law in LAWS.bend. The working lemmas live in proof/, and this file
 # only connects them to the claims.
@@ -162,6 +164,31 @@ def Laws.parallel_search_matches_sequential(t, d, times, cap, job, outside):
 
 def Laws.parallel_check_matches_sequential(inst, plan):
   PS.check_valid(inst, plan)
+
+def Laws.national_matches_one_state_at_a_time(fuel, tune, xs, first, last):
+  PN.national_seq(fuel, tune, xs, first, last)
+
+def Laws.one_plan_per_state(fuel, tune, xs, first, last):
+  +all = N.national(fuel, tune, xs, first, last)
+  +one = N.national.seq(xs, tune, first, last)
+  Equal.trans(Nat, List.length(&2, T.Plan, all), List.length(&2, T.Plan, one), List.length(&2, T.Instance, xs),
+    Equal.cong(List<&2, T.Plan>, Nat, ps => List.length(&2, T.Plan, ps), all, one, PN.national_seq(fuel, tune, xs, first, last)),
+    PN.seq_length(xs, tune, first, last))
+
+def Laws.every_state_plan_is_valid(fuel, tune, xs, first, last, n, inst, plan, at, got, e):
+  +all = N.national(fuel, tune, xs, first, last)
+  +one = N.national.seq(xs, tune, first, last)
+  +sol = S.solve(tune, inst, first, last)
+  +chain = Equal.trans(PN.MP(), Some{plan}, List.get(&2, T.Plan, all, n), Some{sol},
+    Equal.sym(PN.MP(), List.get(&2, T.Plan, all, n), Some{plan}, got),
+    Equal.trans(PN.MP(), List.get(&2, T.Plan, all, n), List.get(&2, T.Plan, one, n), Some{sol},
+      Equal.cong(List<&2, T.Plan>, PN.MP(), ps => List.get(&2, T.Plan, ps, n), all, one, PN.national_seq(fuel, tune, xs, first, last)),
+      Equal.trans(PN.MP(), List.get(&2, T.Plan, one, n), PN.Plan.of(List.get(&2, T.Instance, xs, n), tune, first, last), Some{sol},
+        PN.seq_get(xs, n, tune, first, last),
+        Equal.cong(Maybe<&2, T.Instance>, PN.MP(), m => PN.Plan.of(m, tune, first, last), List.get(&2, T.Instance, xs, n), Some{inst}, at))))
+  +eq = Equal.cong(PN.MP(), T.Plan, m => Maybe.default(&2, T.Plan, m, plan), Some{plan}, Some{sol}, chain)
+  %Equal.sym(T.Plan, plan, sol, eq) : {P.Plan.valid(inst, _) == True{} : Bool}
+  Laws.solved_plan_is_valid(tune, inst, first, last, e)
 
 def Laws.reading_changes_nothing(a, i):
   PRo.read.law(a, i)

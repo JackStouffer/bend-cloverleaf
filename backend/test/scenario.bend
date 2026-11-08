@@ -8,7 +8,9 @@ import ../core/heal.bend as H
 import ../core/solve.bend as S
 import ../core/geo.bend as Geo
 import ../core/times.bend as Tm
+import ../core/nation.bend as N
 import ../solver/synth.bend as Syn
+import ../solver/load.bend as Ld
 import ../road/graph.bend as RG
 import ../road/search.bend as RS
 import ../road/path.bend as RP
@@ -585,6 +587,106 @@ def times_checks() -> List<&2, Check>:
    Check{"work too far by road waits", Nat.is_eq(count_routes(T.Plan.routes(road_plan(250n))), 0n)},
    Check{"a 1,600-pair table finds every pair", Nat.is_eq(times.sum(40n, times.many(), 40n), 60840n)}]
 
+# The national solve
+# ------------------
+
+def Nats.same(xs: List<&2, Nat>, ys: List<&2, Nat>) -> Bool:
+  T.Nats.is_eq(xs, ys)
+
+def nation() -> List<&2, T.Instance>:
+  [inst(), short_inst(), tight_inst(), outside_inst(), road_inst(200n), bench()]
+
+def nation.scores(ps: List<&2, T.Plan>) -> List<&2, Nat>:
+  match ps:
+    case Nil{}:
+      Nil{}
+    case +p <> t:
+      S.score(p) <> nation.scores(t)
+
+def nation.valid(xs: List<&2, T.Instance>, ps: List<&2, T.Plan>) -> Bool:
+  match xs ps:
+    case +x <> xt +p <> pt:
+      Bool.and(P.Plan.valid(x, p), nation.valid(xt, pt))
+    case Nil{} Nil{}:
+      True{}
+    case _ _:
+      False{}
+
+def nation.plans(+fuel: Nat) -> List<&2, T.Plan>:
+  N.national(fuel, tune(), nation(), 20000n, 20005n)
+
+def nation.one(+i: T.Instance) -> T.Plan:
+  S.solve(tune(), i, 20000n, 20005n)
+
+def nation_checks() -> List<&2, Check>:
+  [Check{"a national solve gives one plan per state", Nat.is_eq(List.length(&2, T.Plan, nation.plans(3n)), 6n)},
+   Check{"every state's plan is valid for its instance", nation.valid(nation(), nation.plans(3n))},
+   Check{"forking the states gives the same plans", Nats.same(nation.scores(nation.plans(3n)), nation.scores(nation.plans(0n)))},
+   Check{"a state's plan is its own solve", Nats.same(nation.scores(nation.plans(2n)), nation.scores([nation.one(inst()), nation.one(short_inst()), nation.one(tight_inst()), nation.one(outside_inst()), nation.one(road_inst(200n)), nation.one(bench())]))},
+   Check{"work counts jobs times routes", Nat.is_eq(N.State.work(bench()), Nat.add(1n, Nat.mul(400n, 40n)))},
+   Check{"the split leaves the biggest state alone", Nat.is_eq(N.States.split_at(nation(), Nat.div(N.States.work(nation()), 2n), 0n), 5n)}]
+
+# Loading files
+# -------------
+
+# Delaware, two contractors and one job, in instance.bin words: crew 1 works days
+# 20000 and 20002, crew 4 day 20006 and covers no zips.
+def load.words() -> List<&2, Nat>:
+  [1n, 10n, 60n, 20000n, 7n, 2n, 1n,
+   1n, 390000n, 755000n, 480n, 5n, 2n, 5n, 9n,
+   4n, 391000n, 756000n, 360n, 64n, 0n,
+   3n, 392000n, 757000n, 9n, 20003n, 20n]
+
+def load.file() -> Ld.Got:
+  Ld.instance(load.words())
+
+def load.inst() -> T.Instance:
+  Ld.Got.inst(load.file())
+
+def load.crew(+n: Nat) -> T.Contractor:
+  Maybe.default(&2, T.Contractor, List.get(&2, T.Contractor, T.Instance.crews(load.inst()), n), T.Contractor{0n, nyc(), Nil{}, 0n, Nil{}, 0n})
+
+def load.job() -> T.Appraisal:
+  Maybe.default(&2, T.Appraisal, List.get(&2, T.Appraisal, T.Instance.jobs(load.inst()), 0n), job(0n, 0n, 0n, 0n))
+
+# Their matrix, in row order over homes then sites, as the bytes of matrix.bin.
+def load.byte(+x: Nat, t: List<&2, U32>) -> List<&2, U32>:
+  +w = U32.from_nat(x)
+  U32.and(w, 255) <> U32.and(U32.shrn(w, 8n), 255) <> U32.and(U32.shrn(w, 16n), 255) <> U32.shrn(w, 24n) <> t
+
+def load.bytes(xs: List<&2, Nat>) -> List<&2, U32>:
+  match xs:
+    case Nil{}:
+      Nil{}
+    case x <> t:
+      load.byte(x, load.bytes(t))
+
+def load.cells() -> List<&2, Nat>:
+  [3n, 0n, 6000n, 601n, 6000n, 0n, 4294967295n, 1800n, 4294967295n, 0n]
+
+def load.mx() -> Ld.Mx:
+  Ld.Mx.bytes(load.bytes(load.cells()), Ld.Mx.start(Ld.keys(load.inst())))
+
+def load.times() -> T.Times:
+  Ld.Mx.times(load.mx(), 36000n)
+
+def load.home(+n: Nat) -> T.Point:
+  T.Contractor.home(load.crew(n))
+
+def load_checks() -> List<&2, Check>:
+  [Check{"an instance file gives its state, cap and horizon", Bool.and(Nat.is_eq(T.Instance.state(load.inst()), 10n), Bool.and(Nat.is_eq(T.Instance.cap(load.inst()), 60n), Bool.and(Nat.is_eq(Ld.Got.first(load.file()), 20000n), Nat.is_eq(Ld.Got.days(load.file()), 7n))))},
+   Check{"an instance file gives every crew and job", Bool.and(Nat.is_eq(List.length(&2, T.Contractor, T.Instance.crews(load.inst())), 2n), Nat.is_eq(List.length(&2, T.Appraisal, T.Instance.jobs(load.inst())), 1n))},
+   Check{"a crew record reads in full", T.Contractor.is_eq(load.crew(0n), T.Contractor{1n, T.Point{390000n, 755000n}, [5n, 9n], 480n, [20000n, 20002n], 10n})},
+   Check{"a crew with no zips reads too", T.Contractor.is_eq(load.crew(1n), T.Contractor{4n, T.Point{391000n, 756000n}, Nil{}, 360n, [20006n], 10n})},
+   Check{"a job record reads in full", T.Appraisal.is_eq(load.job(), T.Appraisal{3n, T.Point{392000n, 757000n}, 9n, 20003n, 20n, 10n})},
+   Check{"a loaded instance is a valid instance", P.Instance.ok(load.inst())},
+   Check{"a bad version reads as an empty instance", Nat.is_eq(List.length(&2, T.Contractor, T.Instance.crews(Ld.Got.inst(Ld.instance([2n, 10n])))), 0n)},
+   Check{"a matrix file holds a time per pair", Ld.Mx.ok(load.mx(), 3n)},
+   Check{"a matrix with the wrong count is refused", Bool.not(Ld.Mx.ok(load.mx(), 4n))},
+   Check{"deciseconds round up to minutes", Bool.and(Nat.is_eq(Tm.minutes(load.times(), load.home(0n), load.home(1n)), 10n), Nat.is_eq(Tm.minutes(load.times(), load.home(0n), T.Appraisal.site(load.job())), 2n))},
+   Check{"a time is read in its own direction", Nat.is_eq(Tm.minutes(load.times(), T.Appraisal.site(load.job()), load.home(0n)), 3n)},
+   Check{"an unreachable pair is at least the limit", Nat.is_ge(Tm.minutes(load.times(), load.home(1n), T.Appraisal.site(load.job())), 61n)}]
+
 def show(c: Check) -> String:
   match c:
     case Check{n, True{}}:
@@ -616,5 +718,5 @@ def finish(n: Nat) -> IO(Unit):
       IO.die(Unit, 1, Nat.show(n) ++ " scenarios failed")
 
 def main() -> IO(Unit):
-  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), road_checks()))))
+  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, load_checks(), List.append(&2, Check, nation_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), road_checks()))))))
   IO.bind(Unit, Unit, print_all(all), u => finish(failed(all)))

@@ -6,6 +6,7 @@ import ./core/route.bend as R
 import ./core/plan.bend as P
 import ./core/heal.bend as H
 import ./core/solve.bend as S
+import ./core/nation.bend as N
 import ./road/spec.bend as Sp
 import ./road/search.bend as RS
 import ./road/path.bend as RP
@@ -401,6 +402,42 @@ law parallel_check_matches_sequential:
   for +inst: T.Instance
   for +plan: T.Plan
   {P.Plan.check(inst, plan) == P.Plan.valid(inst, plan) : Bool}
+
+# The national solve
+# ------------------
+
+# Each state is solved on its own, so forking the states changes no plan.
+law national_matches_one_state_at_a_time:
+  for +fuel: Nat
+  for +tune: S.Tuning
+  for +xs: List<&2, T.Instance>
+  for +first: Nat
+  for +last: Nat
+  {N.national(fuel, tune, xs, first, last) == N.national.seq(xs, tune, first, last) : List<&2, T.Plan>}
+
+# Every state gets exactly one plan.
+law one_plan_per_state:
+  for +fuel: Nat
+  for +tune: S.Tuning
+  for +xs: List<&2, T.Instance>
+  for +first: Nat
+  for +last: Nat
+  {List.length(&2, T.Plan, N.national(fuel, tune, xs, first, last)) == List.length(&2, T.Instance, xs) : Nat}
+
+# And state n's plan is valid for state n's instance.
+law every_state_plan_is_valid:
+  for +fuel: Nat
+  for +tune: S.Tuning
+  for +xs: List<&2, T.Instance>
+  for +first: Nat
+  for +last: Nat
+  for +n: Nat
+  for +inst: T.Instance
+  for +plan: T.Plan
+  for +at: {List.get(&2, T.Instance, xs, n) == Some{inst} : Maybe<&2, T.Instance>}
+  for +got: {List.get(&2, T.Plan, N.national(fuel, tune, xs, first, last), n) == Some{plan} : Maybe<&2, T.Plan>}
+  for +e: {P.Instance.ok(inst) == True{} : Bool}
+  Valid(inst, plan)
 
 # Roads
 # -----
