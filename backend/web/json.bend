@@ -30,6 +30,12 @@ def Json.Digits() -> Nat:
 def Json.Max() -> Nat:
   Nat.sub(Nat.mul(100000000n, 1000000n), 1n)
 
+# Whether n has at most Json.Digits() digits, so is at most Json.Max. Checked
+# by its digits and not against Json.Max, because the checker unfolds a
+# comparison with a 14-digit literal one step per unit and runs out of stack.
+def Json.small(n: Nat) -> Bool:
+  Nat.is_le(String.length(Nat.show(n)), Json.Digits())
+
 # Text
 # ----
 def Text.code(c: Char) -> Nat:
@@ -178,6 +184,22 @@ def Json.write(j: Json, acc: String) -> String:
 
 def Json.print(j: Json) -> String:
   Json.write(j, "")
+
+# Every number in j is at most Json.Max, so the parser reads j's text back.
+def Json.fits(j: Json) -> Bool:
+  match j:
+    case JNum{n}:
+      Json.small(n)
+    case JArr{xs}:
+      Json.fits(xs)
+    case JObj{fs}:
+      Json.fits(fs)
+    case JCons{h, t}:
+      Json.fits(h) && Json.fits(t)
+    case JField{k, v, t}:
+      Json.fits(v) && Json.fits(t)
+    case other:
+      True{}
 
 def Json.break(more: Bool, acc: String) -> String:
   match more:

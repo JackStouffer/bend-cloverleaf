@@ -136,6 +136,18 @@ def Reply.body(as: List<&2, Answer>, r: Reply(as)) -> J.Json:
         case Fail{x}:
           Reply.body(rest, x)
 
+# Every number in the reply's value is in range, as S.Schema.within says.
+def Reply.within(as: List<&2, Answer>, r: Reply(as)) -> Bool:
+  match as:
+    case Nil{}:
+      Empty.absurd(Bool, r)
+    case Con{Answer{st, d, s}, rest}:
+      match r:
+        case Done{v}:
+          S.Schema.within(s, v)
+        case Fail{x}:
+          Reply.within(rest, x)
+
 # Whether a status and body fit one of the answers: the status matches and the
 # body decodes under that answer's schema. Contract tests ask the same question
 # of real responses.
@@ -198,43 +210,43 @@ def Api.run(op: Op) -> Reply(Route.answers(Op.route(op))):
 type Cut is Data:
   Cut{head: String, tail: String}
 
-def Text.cut.put(c: Char, m: Maybe<&2, Cut>) -> Maybe<&2, Cut>:
-  match m:
-    case Some{Cut{h, t}}:
-      Some{Cut{SCon{c, h}, t}}
-    case None{}:
-      None{}
-
-def Text.cut.pick(stop: Bool, c: Char, t: String, rest: Maybe<&2, Cut>) -> Maybe<&2, Cut>:
-  match stop:
+# c onto acc, unless it's the stop character, which is dropped.
+def Text.keep(hit: Bool, c: Char, acc: String) -> String:
+  match hit:
     case True{}:
-      Some{Cut{"", t}}
+      acc
     case False{}:
-      Text.cut.put(c, rest)
+      SCon{c, acc}
+
+# Scans s for the stop character, with the text before it reversed in acc. hit
+# says the character just read was the stop, so the scan ends there and reads
+# no further. Tail recursive, so a long request costs no stack.
+def Text.cut.go(+stop: Nat, s: String, hit: Bool, acc: String) -> Maybe<&2, Cut>:
+  match s hit:
+    case rest True{}:
+      Some{Cut{String.reverse(acc), rest}}
+    case SNil{} False{}:
+      None{}
+    case SCon{+c, t} False{}:
+      Text.cut.go(stop, t, Nat.is_eq(J.Text.code(c), stop), Text.keep(Nat.is_eq(J.Text.code(c), stop), c, acc))
 
 # Splits s at the first character with code stop, which is dropped. None if s
 # has no such character.
 def Text.cut(+stop: Nat, s: String) -> Maybe<&2, Cut>:
-  match s:
-    case SNil{}:
-      None{}
-    case SCon{+c, +t}:
-      Text.cut.pick(Nat.is_eq(J.Text.code(c), stop), c, t, Text.cut(stop, t))
+  Text.cut.go(stop, s, False{}, "")
 
-def Text.before.pick(stop: Bool, c: Char, rest: String) -> String:
-  match stop:
-    case True{}:
-      ""
-    case False{}:
-      SCon{c, rest}
+def Text.before.go(+stop: Nat, s: String, hit: Bool, acc: String) -> String:
+  match s hit:
+    case rest True{}:
+      String.reverse(acc)
+    case SNil{} False{}:
+      String.reverse(acc)
+    case SCon{+c, t} False{}:
+      Text.before.go(stop, t, Nat.is_eq(J.Text.code(c), stop), Text.keep(Nat.is_eq(J.Text.code(c), stop), c, acc))
 
 # s up to the first character with code stop, or all of s.
 def Text.before(+stop: Nat, s: String) -> String:
-  match s:
-    case SNil{}:
-      ""
-    case SCon{+c, t}:
-      Text.before.pick(Nat.is_eq(J.Text.code(c), stop), c, Text.before(stop, t))
+  Text.before.go(stop, s, False{}, "")
 
 # A request line: the method and the path, with any query string dropped.
 type Line is Data:

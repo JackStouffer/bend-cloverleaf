@@ -779,6 +779,9 @@ def web.reads.got(m: Maybe<&2, WJ.Json>) -> Bool:
 def web.reads(s: String) -> Bool:
   web.reads.got(WJ.Json.parse(s))
 
+def web.nat(n: Nat) -> Bool:
+  Maybe.is_some(&2, Nat, WS.decode(WS.SNat{}, WJ.JNum{n}))
+
 def web_checks() -> List<&2, Check>:
   [Check{"GET /api/health answers 200 with its body", web.is("GET /api/health HTTP/1.1\r\nHost: localhost\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
    Check{"a query string doesn't change the route", web.is("GET /api/health?verbose=1 HTTP/1.1\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
@@ -791,6 +794,10 @@ def web_checks() -> List<&2, Check>:
    Check{"an object decodes with or without its optional field", Bool.and(web.reads("{\"error\":\"x\"}"), web.reads("{\"detail\":\"y\",\"error\":\"x\"}"))},
    Check{"an object with a missing, unknown or repeated field is refused", Bool.not(Bool.or(web.reads("{\"detail\":\"y\"}"), Bool.or(web.reads("{\"error\":\"x\",\"extra\":1}"), web.reads("{\"error\":\"x\",\"error\":\"y\"}"))))},
    Check{"Content-Length counts UTF-8 bytes", Nat.is_eq(WJ.Text.bytes("a\u{e9}\u{1f600}", 0n), 7n)},
+   Check{"Json.small holds up to 14 digits and no further", Bool.and(WJ.Json.small(WJ.Json.Max()), Bool.not(WJ.Json.small(Nat.add(WJ.Json.Max(), 1n))))},
+   Check{"the decoder refuses a number the parser would refuse", Bool.and(web.nat(WJ.Json.Max()), Bool.not(web.nat(Nat.add(WJ.Json.Max(), 1n))))},
+   Check{"the request line ends at its first space and the path at its first ?", web.is("GET /api/health?a=1?b HTTP/1.1\r\nX-Note: a b c ? d\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
+   Check{"a request with a 200,000 byte header still parses", web.is("GET /api/health HTTP/1.1\r\nX-Pad: " ++ String.repeat("a", 200000n) ++ "\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
    Check{"the spec is OpenAPI 3.1", String.starts_with(WO.Spec.text(), "{\n  \"openapi\": \"3.1.0\",")}]
 
 def show(c: Check) -> String:

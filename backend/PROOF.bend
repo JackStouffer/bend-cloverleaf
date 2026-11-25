@@ -217,19 +217,30 @@ def Laws.dealing_keeps_every_job(xs):
 def Laws.lanes_fit_the_budget(k, per, budget, e):
   PRo.budget.fits(k, per, budget, e)
 
-def Laws.decode_undoes_encode(s, v, e):
-  PW.roundtrip(s, v, e)
+def Laws.decode_undoes_encode(s, v, e, w):
+  PW.roundtrip(s, v, e, w)
 
-def Laws.replies_fit_their_answers(as, r, e):
-  PW.reply_fits(as, r, e)
+def Laws.replies_fit_their_answers(as, r, e, w):
+  PW.reply_fits(as, r, e, w)
 
 def Laws.route_schemas_are_distinct(op):
   match op:
     case WA.Health{}:
       {==}
 
+def Laws.handlers_stay_in_range(op):
+  match op:
+    case WA.Health{}:
+      {==}
+
+def Laws.encoded_numbers_fit(s, v, w):
+  PW.encoded_fits(s, v, w)
+
+def Laws.every_response_parses_back(op):
+  PW.reply_body_fits(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op), Laws.handlers_stay_in_range(op))
+
 def Laws.every_handler_fits_its_route(op):
-  PW.reply_fits(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op), Laws.route_schemas_are_distinct(op))
+  PW.reply_fits(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op), Laws.route_schemas_are_distinct(op), Laws.handlers_stay_in_range(op))
 
 def Laws.spec_names_agree():
   {==}

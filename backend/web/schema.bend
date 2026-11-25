@@ -170,10 +170,18 @@ def Codec.str(j: J.Json) -> Maybe<&2, String>:
     case other:
       None{}
 
+def Codec.nat.pick(ok: Bool, n: Nat) -> Maybe<&2, Nat>:
+  match ok:
+    case True{}:
+      Some{n}
+    case False{}:
+      None{}
+
+# A number above Json.Max is refused, as the parser and the spec refuse it.
 def Codec.nat(j: J.Json) -> Maybe<&2, Nat>:
   match j:
-    case J.JNum{v}:
-      Some{v}
+    case J.JNum{+v}:
+      Codec.nat.pick(J.Json.small(v), v)
     case other:
       None{}
 
@@ -220,6 +228,40 @@ def decode(s: Schema, +j: J.Json) -> Maybe<&2, Value(s)>:
       Codec.both(Maybe<&2, Value(f)>, Value(r), Codec.opt(Value(f), Take.has(k, j), decode(f, Take.found(k, j))), decode(r, Take.rest(k, j)))
     case SEnd{}:
       Codec.end(j)
+
+# Numbers in range
+# ----------------
+
+# Every Nat in v is at most Json.Max, the largest number the parser reads and
+# the maximum the spec publishes. A Nat can be larger, so encode alone could
+# send a number no client is told to expect. The laws ask for this of every
+# value they encode, and every handler's reply is checked for it.
+def Schema.within(s: Schema, v: Value(s)) -> Bool:
+  match s:
+    case SNat{}:
+      J.Json.small(v)
+    case SList{it}:
+      Schema.within(it, v)
+    case SItems{+i}:
+      match v:
+        case Nil{}:
+          True{}
+        case Con{x, rest}:
+          Schema.within(i, x) && Schema.within(SItems{i}, rest)
+    case SObj{n, r}:
+      Schema.within(r, v)
+    case SField{k, f, r}:
+      (a, b) = v
+      Schema.within(f, a) && Schema.within(r, b)
+    case SOpt{k, f, r}:
+      (m, b) = v
+      match m:
+        case None{}:
+          Schema.within(r, b)
+        case Some{a}:
+          Schema.within(f, a) && Schema.within(r, b)
+    case other:
+      True{}
 
 # Well-formed keys
 # ----------------

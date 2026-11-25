@@ -284,8 +284,9 @@ Proven so far in `LAWS.bend`, for the pure core:
 - The lane depth the shell allows fits its memory budget.
 - The optimizer never returns a worse score than its input.
 - The planner only considers open routes, on or before the deadline, with the hours left, and only urgent work leaves its zips.
-- Codecs round-trip: decoding what a schema encodes gives back the same value, for any schema whose objects name each field once. Every route's schemas are checked for that.
+- Codecs round-trip: decoding what a schema encodes gives back the same value, for any schema whose objects name each field once and any value whose numbers are at most `Json.Max`. Every route's schemas and every handler's reply are checked for those.
 - Every reply a handler can build has a status its route declares and a body that decodes under that status's schema, and every handler's reply fits its own route.
+- Every body a handler sends has numbers the parser can read back, so the server never sends what its own client contract refuses.
 - Each component name in the spec has one definition.
 
 Road times use the same idea as `publish`. The search isn't proven to find anything, so a lookup walks the path it left behind against the graph and reports only what that walk confirms. A search bug shows up as a refused lookup, which the shell won't report, never as a wrong time. `Array` is a tree in Base, so laws can reason about reads directly. An array can't be copied in a proof, so `proof/road.bend` proves the Base clone gives two provably equal live copies and builds on that.
@@ -525,10 +526,10 @@ Some injected bugs were caught because a proof script stopped matching the code,
 
 | Measure | Result |
 |---|---|
-| Laws | 5 new, in 40 lines |
-| Web code | 1,642 lines, of which 1,583 are pure |
-| Proofs | 232 lines and 9 lemmas in `proof/web.bend`, 0.14 proof lines per line of code |
-| Checking `proof/web.bend` | 0.4s |
+| Laws | 8 new, in 58 lines |
+| Web code | 1,718 lines, of which 1,659 are pure |
+| Proofs | 298 lines and 13 lemmas in `proof/web.bend`, 0.17 proof lines per line of code |
+| Checking `proof/web.bend` | 0.5s |
 | `@unsafe` or foreign code | None |
 | `--verdict` | Not run: Lean isn't installed in this environment |
 
@@ -536,7 +537,7 @@ The round trip took most of the proof work, and all of it was in object rows: a 
 
 **Bugs**
 
-Proofs caught no bug in the code as written. Two injected bugs were caught at once: a handler returning a number for a string field failed to typecheck, and a schema naming a field twice failed `route_schemas_are_distinct`. Renaming the health field in Bend made the drift check fail, and after regenerating, `tsc` rejected the frontend's use of the old name.
+Proofs caught no bug in the code as written, but a code review caught two that the laws had no way to state. The decoder took any number, while the parser and the spec stop at 14 digits, so the round trip held for values the server could send but its own clients would refuse. The decoder now refuses them too, the round trip gained a `Schema.within` precondition, and `every_response_parses_back` proves every handler stays in range. The request-line parser also recursed through the whole request before deciding, so a large header cost stack for nothing. It now scans tail-recursively and stops at the first match, and a scenario sends a 200,000 byte header. Two injected bugs were caught at once: a handler returning a number for a string field failed to typecheck, and a schema naming a field twice failed `route_schemas_are_distinct`. Renaming the health field in Bend made the drift check fail, and after regenerating, `tsc` rejected the frontend's use of the old name.
 
 **Friction**
 
@@ -545,6 +546,8 @@ Proofs caught no bug in the code as written. Two injected bugs were caught at on
 - **No `if` on a computed value:** every `match` on a parse result or a comparison needs its own helper def, so the parser is about 70 small defs.
 - **Pairs:** `A & B` is a `Type` and can't hold `Data` values in a schema's `Value`, so fields are `Sigma` pairs.
 - **Literals:** a `Nat` literal above 2^32 is refused, so the 14-digit limit is computed.
+- **Checker stack:** comparing a symbolic `Nat` with the computed 14-digit limit made the checker unfold the literal one step per unit and overflow its stack. `Json.small` counts digits instead, which says the same thing in a form the checker can handle.
+- **No proof irrelevance:** the natural fix for the number range was a `Nat` paired with evidence that it's in range, but two proofs of the same fact aren't equal to the checker, so such a value can't round-trip. The range became a precondition on the law instead.
 - **Good:** a type computed from data works as hoped. `Api.run` returns `Reply(Route.answers(Op.route(op)))`, and the checker reduces it to the exact shape the route declares. The `.mjs` build made checking the parser against JavaScript a 100-line test.
 
 ### Milestone 3 results

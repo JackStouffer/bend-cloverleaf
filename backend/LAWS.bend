@@ -540,11 +540,14 @@ law lanes_fit_the_budget:
 
 # The codecs agree: whatever a schema encodes, it decodes back to the same
 # value. JSON can't hold one object with a key twice, so it holds for schemas
-# whose objects name each field once, and every route's schemas do.
+# whose objects name each field once, and every route's schemas do. The decoder
+# refuses a number over Json.Max, as the parser and the spec do, so it also
+# needs every number in the value to be in range, and every handler's are.
 law decode_undoes_encode:
   for +s: WS.Schema
   for +v: WS.Value(s)
   for +e: {WS.Schema.distinct(s) == True{} : Bool}
+  for +w: {WS.Schema.within(s, v) == True{} : Bool}
   {WS.decode(s, WS.encode(s, v)) == Some{v} : Maybe<&2, WS.Value(s)>}
 
 # A reply can only be one of its answers, so its status is one the route
@@ -553,11 +556,30 @@ law replies_fit_their_answers:
   for +as: List<&2, WA.Answer>
   for +r: WA.Reply(as)
   for +e: {WA.Answers.distinct(as) == True{} : Bool}
+  for +w: {WA.Reply.within(as, r) == True{} : Bool}
   {WA.Answers.accepts(as, WA.Reply.status(as, r), WA.Reply.body(as, r)) == True{} : Bool}
 
 law route_schemas_are_distinct:
   for +op: WA.Op
   {WA.Answers.distinct(WA.Route.answers(WA.Op.route(op))) == True{} : Bool}
+
+# No handler replies with a number over Json.Max, the most the parser reads
+# and the maximum the spec publishes.
+law handlers_stay_in_range:
+  for +op: WA.Op
+  {WA.Reply.within(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op)) == True{} : Bool}
+
+# A value in range encodes with every number at most Json.Max.
+law encoded_numbers_fit:
+  for +s: WS.Schema
+  for +v: WS.Value(s)
+  for +w: {WS.Schema.within(s, v) == True{} : Bool}
+  {WJ.Json.fits(WS.encode(s, v)) == True{} : Bool}
+
+# So every body a handler sends is one the parser can read back.
+law every_response_parses_back:
+  for +op: WA.Op
+  {WJ.Json.fits(WA.Reply.body(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op))) == True{} : Bool}
 
 # Every response a handler sends fits the route the spec publishes for it.
 law every_handler_fits_its_route:
