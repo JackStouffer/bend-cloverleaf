@@ -67,8 +67,8 @@ bend road/main.bend -o build/road                                    # build the
 Run these from `frontend/`, on Node 24:
 
 ```bash
-npm run check                         # types, lint and format, plus tests and spec drift when added
-npm run gen:api                       # regenerate openapi.json and the typed client, once added
+npm run check                         # types, lint, format and spec drift, plus tests when added
+npm run gen:api                       # regenerate backend/openapi.json and src/api/schema.ts; needs bend on PATH
 ```
 
 ## Laws and proofs

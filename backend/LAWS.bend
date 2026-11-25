@@ -11,6 +11,10 @@ import ./road/spec.bend as Sp
 import ./road/search.bend as RS
 import ./road/path.bend as RP
 import ./road/lanes.bend as RL
+import ./web/json.bend as WJ
+import ./web/schema.bend as WS
+import ./web/api.bend as WA
+import ./web/openapi.bend as WO
 
 # The rules Cloverleaf has to keep, as claims over the pure core. PROOF.bend proves
 # each one, and `bend PROOF.bend` fails until every claim holds.
@@ -530,3 +534,39 @@ law lanes_fit_the_budget:
   for +budget: Nat
   for +e: {Nat.is_le(per, budget) == True{} : Bool}
   {Nat.is_le(Nat.mul(Nat.pow(2n, RL.Lanes.fit(k, per, budget)), per), budget) == True{} : Bool}
+
+# The API contract
+# ----------------
+
+# The codecs agree: whatever a schema encodes, it decodes back to the same
+# value. JSON can't hold one object with a key twice, so it holds for schemas
+# whose objects name each field once, and every route's schemas do.
+law decode_undoes_encode:
+  for +s: WS.Schema
+  for +v: WS.Value(s)
+  for +e: {WS.Schema.distinct(s) == True{} : Bool}
+  {WS.decode(s, WS.encode(s, v)) == Some{v} : Maybe<&2, WS.Value(s)>}
+
+# A reply can only be one of its answers, so its status is one the route
+# declares and its body decodes under that status's schema.
+law replies_fit_their_answers:
+  for +as: List<&2, WA.Answer>
+  for +r: WA.Reply(as)
+  for +e: {WA.Answers.distinct(as) == True{} : Bool}
+  {WA.Answers.accepts(as, WA.Reply.status(as, r), WA.Reply.body(as, r)) == True{} : Bool}
+
+law route_schemas_are_distinct:
+  for +op: WA.Op
+  {WA.Answers.distinct(WA.Route.answers(WA.Op.route(op))) == True{} : Bool}
+
+# Every response a handler sends fits the route the spec publishes for it.
+law every_handler_fits_its_route:
+  for +op: WA.Op
+  {WA.Answers.accepts(WA.Route.answers(WA.Op.route(op)),
+    WA.Reply.status(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op)),
+    WA.Reply.body(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op))) == True{} : Bool}
+
+# Each component name in the spec has one definition, so a $ref always means
+# the schema the route uses.
+law spec_names_agree:
+  {WO.Spec.agree(WO.Spec.all(WA.Api.routes(WA.Api.ops()))) == True{} : Bool}

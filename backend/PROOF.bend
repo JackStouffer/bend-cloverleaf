@@ -17,6 +17,8 @@ import ./proof/solve.bend as PS
 import ./proof/road.bend as PRo
 import ./proof/nation.bend as PN
 import ./core/nation.bend as N
+import ./web/api.bend as WA
+import ./proof/web.bend as PW
 
 # Proves every law in LAWS.bend. The working lemmas live in proof/, and this file
 # only connects them to the claims.
@@ -214,3 +216,20 @@ def Laws.dealing_keeps_every_job(xs):
 
 def Laws.lanes_fit_the_budget(k, per, budget, e):
   PRo.budget.fits(k, per, budget, e)
+
+def Laws.decode_undoes_encode(s, v, e):
+  PW.roundtrip(s, v, e)
+
+def Laws.replies_fit_their_answers(as, r, e):
+  PW.reply_fits(as, r, e)
+
+def Laws.route_schemas_are_distinct(op):
+  match op:
+    case WA.Health{}:
+      {==}
+
+def Laws.every_handler_fits_its_route(op):
+  PW.reply_fits(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op), Laws.route_schemas_are_distinct(op))
+
+def Laws.spec_names_agree():
+  {==}

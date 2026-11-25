@@ -32,6 +32,8 @@ RUN bend PROOF.bend \
   && bend web/main.bend --check-only \
   && bend road/main.bend --check-only \
   && bend solver/main.bend --check-only \
+  && bend web/spec.bend > /tmp/openapi.json \
+  && cmp /tmp/openapi.json openapi.json \
   && mkdir -p /out \
   && bend test/scenario.bend -o /out/scenario \
   && /out/scenario \

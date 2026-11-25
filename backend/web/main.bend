@@ -1,5 +1,5 @@
 import Base
-import ./routes.bend as Routes
+import ./api.bend as Api
 
 def sent(result: Socket & Result<&1, &1, (U32 & String) & List<&2, U32>, Unit>) -> IO(Unit):
   (socket, outcome) = result
@@ -11,7 +11,7 @@ def answer(socket: Socket, request: Maybe<&1, String>) -> IO(Unit):
       Socket.close(socket)
     case Some{text}:
       IO.bind(Socket & Result<&1, &1, (U32 & String) & List<&2, U32>, Unit>, Unit,
-        TCP.send(socket, Routes.route(text)), sent)
+        TCP.send(socket, Api.Api.handle(text)), sent)
 
 def received(result: Socket & Result<&1, &1, U32 & String, Maybe<&1, String>>) -> IO(Unit):
   (socket, outcome) = result

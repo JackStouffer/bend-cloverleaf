@@ -1,12 +1,13 @@
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
+import { api } from "./api/client";
 
 type Health = "checking" | "ok" | "unavailable";
 
 async function fetchHealth(): Promise<Health> {
   try {
-    const response = await fetch("/api/health");
-    return response.ok ? "ok" : "unavailable";
+    const { data } = await api.GET("/api/health");
+    return data?.status === "ok" ? "ok" : "unavailable";
   } catch {
     return "unavailable";
   }
