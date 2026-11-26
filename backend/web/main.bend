@@ -9,9 +9,10 @@ import ./utf8.bend as U
 # before its response is sent, so a reply the client saw survives a crash.
 #
 # The data directory comes from CLOVERLEAF_DATA, /data by default. It holds
-# events.log, one change per line, never rewritten, and snapshot.json, the
+# events.log, one change per line, never rewritten, and snapshot.jsonl, the
 # store after the log's first lines. The snapshot is rewritten at startup,
-# after the replay. A snapshot cut off by a crash doesn't parse, and then the
+# after the replay. Both are read and written a line at a time, so neither is
+# ever held whole. A snapshot cut off by a crash doesn't load, and then the
 # whole log is replayed.
 
 def Job() -> Type:
@@ -23,8 +24,10 @@ def Wrote() -> Type:
 def Bytes() -> Type:
   File & Result<&1, &1, U32 & String, List<&2, U32>>
 
+# The log handle, whether a write failed partway and may have left a torn line,
+# and the store.
 def Next() -> Type:
-  File -> St.Store -> IO(Unit)
+  File -> Bool -> St.Store -> IO(Unit)
 
 # The store's loop
 # ----------------
@@ -35,40 +38,40 @@ def saved(w: Wrote(), +c: St.Change, response: String, +store: St.Store, reply: 
     case Done{u}:
       do IO<Unit>:
         sent : Result<&1, &1, String, Unit> <- Chan.send(String, reply, response)
-        next(log, St.Store.apply(store, c))
+        next(log, False{}, St.Store.apply(store, c))
     case Fail{e}:
       do IO<Unit>:
         IO.print_err("cloverleaf web: the event log could not be written, so a change was refused")
         sent : Result<&1, &1, String, Unit> <- Chan.send(String, reply, Api.Api.unsaved())
-        next(log, store)
+        next(log, True{}, store)
 
-def logged(change: Maybe<&2, St.Change>, response: String, log: File, +store: St.Store, reply: Chan(String), next: Next()) -> IO(Unit):
+def logged(change: Maybe<&2, St.Change>, response: String, log: File, torn: Bool, +store: St.Store, reply: Chan(String), next: Next()) -> IO(Unit):
   match change:
     case None{}:
       do IO<Unit>:
         sent : Result<&1, &1, String, Unit> <- Chan.send(String, reply, response)
-        next(log, store)
+        next(log, torn, store)
     case Some{+c}:
-      IO.bind(Wrote(), Unit, File.write(log, St.Change.line(c)), w => saved(w, c, response, store, reply, next))
+      IO.bind(Wrote(), Unit, File.write(log, St.Change.line.after(torn, c)), w => saved(w, c, response, store, reply, next))
 
-def handled(+h: Api.Handled, log: File, +store: St.Store, reply: Chan(String), next: Next()) -> IO(Unit):
-  logged(Api.Handled.change(h), Api.Handled.response(h), log, store, reply, next)
+def handled(+h: Api.Handled, log: File, torn: Bool, +store: St.Store, reply: Chan(String), next: Next()) -> IO(Unit):
+  logged(Api.Handled.change(h), Api.Handled.response(h), log, torn, store, reply, next)
 
-def took(got: Maybe<&1, Job()>, log: File, +store: St.Store, next: Next()) -> IO(Unit):
+def took(got: Maybe<&1, Job()>, log: File, torn: Bool, +store: St.Store, next: Next()) -> IO(Unit):
   match got:
     case None{}:
       File.close(log)
     case Some{job}:
       (text, reply) = job
-      handled(Api.Api.handle(text, store), log, store, reply, next)
+      handled(Api.Api.handle(text, store), log, torn, store, reply, next)
 
-def keep(fuel: Nat, log: File, store: St.Store, +jobs: Chan(Job())) -> IO(Unit):
+def keep(fuel: Nat, log: File, torn: Bool, store: St.Store, +jobs: Chan(Job())) -> IO(Unit):
   match fuel:
     case 0n:
       File.close(log)
     case 1n+rest:
       IO.bind(Maybe<&1, Job()>, Unit, Chan.recv(Job(), jobs),
-        got => took(got, log, store, l => s => keep(rest, l, s, jobs)))
+        got => took(got, log, torn, store, l => t => s => keep(rest, l, t, s, jobs)))
 
 # Connections
 # -----------
@@ -148,47 +151,6 @@ def serve(fuel: Nat, listener: Listener, +jobs: Chan(Job())) -> IO(Unit):
 # Startup
 # -------
 
-def whole(chunks: List<&2, List<&2, U32>>) -> List<&2, U32>:
-  List.concat(&2, U32, List.reverse(&2, List<&2, U32>, chunks))
-
-def slurp.end(f: File, chunks: List<&2, List<&2, U32>>) -> IO(List<&2, U32>):
-  do IO<List<&2, U32>>:
-    File.close(f)
-    return whole(chunks)
-
-def slurp.more(empty: Bool, f: File, bs: List<&2, U32>, chunks: List<&2, List<&2, U32>>, next: File -> List<&2, List<&2, U32>> -> IO(List<&2, U32>)) -> IO(List<&2, U32>):
-  match empty:
-    case True{}:
-      slurp.end(f, chunks)
-    case False{}:
-      next(f, bs <> chunks)
-
-def slurp.got(p: Bytes(), chunks: List<&2, List<&2, U32>>, next: File -> List<&2, List<&2, U32>> -> IO(List<&2, U32>)) -> IO(List<&2, U32>):
-  (f, r) = p
-  match r:
-    case Fail{e}:
-      slurp.end(f, chunks)
-    case Done{+bs}:
-      slurp.more(List.is_empty(&2, U32, bs), f, bs, chunks, next)
-
-def slurp(fuel: Nat, f: File, chunks: List<&2, List<&2, U32>>) -> IO(List<&2, U32>):
-  match fuel:
-    case 0n:
-      slurp.end(f, chunks)
-    case 1n+rest:
-      IO.bind(Bytes(), List<&2, U32>, File.read_bytes(f, 65536), p => slurp.got(p, chunks, g => c => slurp(rest, g, c)))
-
-# A file's bytes, or none if it can't be opened.
-def read_all.opened(r: Result<&1, &1, U32 & String, File>) -> IO(List<&2, U32>):
-  match r:
-    case Fail{e}:
-      IO.pure(List<&2, U32>, [])
-    case Done{f}:
-      slurp(1000000n, f, [])
-
-def read_all(path: String) -> IO(List<&2, U32>):
-  IO.bind(Result<&1, &1, U32 & String, File>, List<&2, U32>, File.open(path, "r"), read_all.opened)
-
 def replay.end(f: File, r: St.Replay) -> IO(St.Replay):
   do IO<St.Replay>:
     File.close(f)
@@ -228,27 +190,75 @@ def read_log.opened(o: Result<&1, &1, U32 & String, File>, r: St.Replay) -> IO(S
 def read_log(path: String, r: St.Replay) -> IO(St.Replay):
   IO.bind(Result<&1, &1, U32 & String, File>, St.Replay, File.open(path, "r"), o => read_log.opened(o, r))
 
-def wrote.close(w: Wrote()) -> IO(Unit):
+# The snapshot, read a chunk at a time.
+def load.end(f: File, l: St.Load) -> IO(St.Load):
+  do IO<St.Load>:
+    File.close(f)
+    return l
+
+def load.more(empty: Bool, f: File, bs: List<&2, U32>, l: St.Load, next: File -> St.Load -> IO(St.Load)) -> IO(St.Load):
+  match empty:
+    case True{}:
+      load.end(f, l)
+    case False{}:
+      next(f, St.Load.feed(bs, l))
+
+def load.got(p: Bytes(), l: St.Load, next: File -> St.Load -> IO(St.Load)) -> IO(St.Load):
+  (f, got) = p
+  match got:
+    case Fail{e}:
+      load.end(f, St.Load.broken())
+    case Done{+bs}:
+      load.more(List.is_empty(&2, U32, bs), f, bs, l, next)
+
+def load(fuel: Nat, f: File, l: St.Load) -> IO(St.Load):
+  match fuel:
+    case 0n:
+      load.end(f, St.Load.broken())
+    case 1n+rest:
+      IO.bind(Bytes(), St.Load, File.read_bytes(f, 65536), p => load.got(p, l, g => m => load(rest, g, m)))
+
+def read_snapshot.opened(o: Result<&1, &1, U32 & String, File>) -> IO(St.Load):
+  match o:
+    case Fail{e}:
+      IO.pure(St.Load, St.Load.start())
+    case Done{f}:
+      load(100000000n, f, St.Load.start())
+
+def read_snapshot(path: String) -> IO(St.Load):
+  IO.bind(Result<&1, &1, U32 & String, File>, St.Load, File.open(path, "r"), read_snapshot.opened)
+
+# The snapshot, written a line at a time.
+def snap.next(w: Wrote(), next: File -> IO(Unit)) -> IO(Unit):
   (f, r) = w
   match r:
     case Done{u}:
-      File.close(f)
+      next(f)
     case Fail{e}:
       do IO<Unit>:
         IO.print_err("cloverleaf web: the snapshot could not be written")
         File.close(f)
 
-def snapshot.opened(o: Result<&1, &1, U32 & String, File>, text: String) -> IO(Unit):
+def snap.recs(fuel: Nat, f: File, rs: List<&2, St.Rec>) -> IO(Unit):
+  match fuel rs:
+    case 0n _:
+      File.close(f)
+    case 1n+k Nil{}:
+      File.close(f)
+    case 1n+k Con{r, rest}:
+      IO.bind(Wrote(), Unit, File.write(f, St.Rec.line(r)), w => snap.next(w, g => snap.recs(k, g, rest)))
+
+def snapshot.opened(o: Result<&1, &1, U32 & String, File>, head: String, +rs: List<&2, St.Rec>) -> IO(Unit):
   match o:
     case Fail{e}:
       IO.print_err("cloverleaf web: the snapshot could not be opened")
     case Done{f}:
-      IO.bind(Wrote(), Unit, File.write(f, text), wrote.close)
+      IO.bind(Wrote(), Unit, File.write(f, head), w => snap.next(w, g => snap.recs(List.length(&2, St.Rec, rs), g, rs)))
 
-def snapshot.write(newer: Bool, path: String, n: Nat, store: St.Store) -> IO(Unit):
+def snapshot.write(newer: Bool, path: String, n: Nat, +store: St.Store) -> IO(Unit):
   match newer:
     case True{}:
-      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open(path, "w"), o => snapshot.opened(o, St.Snapshot.text(n, store)))
+      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open(path, "w"), o => snapshot.opened(o, St.Snapshot.head(n, store), St.Store.recs(store)))
     case False{}:
       IO.pure(Unit, Unit{})
 
@@ -267,7 +277,7 @@ def mend(torn: Bool, log: File) -> IO(File):
 
 def run(+jobs: Chan(Job()), log: File, store: St.Store) -> IO(Unit):
   do IO<Unit>:
-    IO.spawn(Unit, keep(4000000000n, log, store, jobs))
+    IO.spawn(Unit, keep(4000000000n, log, False{}, store, jobs))
     listener : Listener <- IO.try(Listener, TCP.listen("0.0.0.0", 8080))
     IO.print("cloverleaf web listening on 8080")
     serve(4000000000n, listener, jobs)
@@ -283,7 +293,7 @@ def mended(+dir: String, +skip: Nat, torn: Bool, +r: St.Replay) -> IO(Unit):
       ++ Nat.show(St.Replay.bad(r)) ++ " not a change")
     log : File <- IO.try(File, File.open(dir ++ "/events.log", "a"))
     mended : File <- mend(torn, log)
-    snapshot.write(Nat.is_lt(skip, St.Replay.lines(r)), dir ++ "/snapshot.json", St.Replay.lines(r), St.Replay.store(r))
+    snapshot.write(Nat.is_lt(skip, St.Replay.lines(r)), dir ++ "/snapshot.jsonl", St.Replay.lines(r), St.Replay.store(r))
     serving(mended, St.Replay.store(r))
 
 def resumed(+dir: String, +skip: Nat, +r: St.Replay) -> IO(Unit):
@@ -303,8 +313,8 @@ def begin(+dir: String, m: Maybe<&2, St.Snap>) -> IO(Unit):
 
 def start(+dir: String) -> IO(Unit):
   do IO<Unit>:
-    snap : List<&2, U32> <- read_all(dir ++ "/snapshot.json")
-    begin(dir, St.Snapshot.parse(U.Utf8.decode(snap)))
+    snap : St.Load <- read_snapshot(dir ++ "/snapshot.jsonl")
+    begin(dir, St.Load.finish(snap))
 
 def data_dir(r: Result<&1, &1, U32 & String, String>) -> String:
   match r:

@@ -30,6 +30,8 @@ test("paths match their templates and give their parameters", () => {
   const found = operation(spec, "POST", "/api/v1/appraisals/a7/cancel");
   assert.equal(found.template, "/api/v1/appraisals/{id}/cancel");
   assert.deepEqual(found.params, { id: "a7" });
+  assert.deepEqual(operation(spec, "GET", "/api/v1/appraisals/a%207").params, { id: "a%207" });
+  assert.deepEqual(operation(spec, "GET", "/api/v1/appraisals/%E0").params, { id: "%E0" });
   assert.equal(operation(spec, "GET", "/api/v1/appraisals/a7/x"), undefined);
   assert.equal(operation(spec, "DELETE", "/api/v1/appraisals/a7").op, undefined);
 });
@@ -43,6 +45,10 @@ test("a response is held to its route's answers", () => {
   assert.equal(conforms(spec, "GET", "/api/v1/appraisals/a1", 201, json, body).length, 1);
   assert.equal(conforms(spec, "GET", "/api/v1/appraisals/a1", 200, json, err).length > 0, true);
   assert.equal(conforms(spec, "GET", "/api/v1/appraisals/a1", 500, json, err).length, 1);
+  const unsaved = JSON.stringify({ error: "not_saved" });
+  assert.deepEqual(conforms(spec, "POST", "/api/v1/appraisals", 500, json, unsaved), []);
+  assert.deepEqual(conforms(spec, "POST", "/api/v1/appraisals/a1/cancel", 500, json, unsaved), []);
+  assert.equal(conforms(spec, "GET", "/api/health", 500, json, unsaved).length, 1);
   assert.equal(conforms(spec, "GET", "/api/v1/appraisals/a1", 200, "text/html", body).length, 1);
   assert.deepEqual(conforms(spec, "DELETE", "/api/v1/appraisals/a1", 405, json, JSON.stringify({ error: "method_not_allowed" })), []);
   assert.deepEqual(conforms(spec, "GET", "/api/nope", 404, json, JSON.stringify({ error: "not_found" })), []);

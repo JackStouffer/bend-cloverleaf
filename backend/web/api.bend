@@ -181,27 +181,34 @@ def Status.reason(s: Status) -> String:
 type Answer is Data:
   Answer{status: Status, description: String, schema: S.Schema}
 
+# writes says whether the route's handler can change the store, so the shell
+# can answer it with a 500 when the log can't be written.
 type Route is Data:
-  Route{method: Method, path: String, id: String, summary: String, body: Maybe<&2, S.Schema>, answers: List<&2, Answer>}
+  Route{method: Method, path: String, id: String, summary: String, body: Maybe<&2, S.Schema>, writes: Bool, answers: List<&2, Answer>}
 
 def Route.method(r: Route) -> Method:
   match r:
-    case Route{m, p, i, s, b, a}:
+    case Route{m, p, i, s, b, w, a}:
       m
 
 def Route.path(r: Route) -> String:
   match r:
-    case Route{m, p, i, s, b, a}:
+    case Route{m, p, i, s, b, w, a}:
       p
 
 def Route.body(r: Route) -> Maybe<&2, S.Schema>:
   match r:
-    case Route{m, p, i, s, b, a}:
+    case Route{m, p, i, s, b, w, a}:
       b
+
+def Route.writes(r: Route) -> Bool:
+  match r:
+    case Route{m, p, i, s, b, w, a}:
+      w
 
 def Route.answers(r: Route) -> List<&2, Answer>:
   match r:
-    case Route{m, p, i, s, b, a}:
+    case Route{m, p, i, s, b, w, a}:
       a
 
 # Replies
@@ -320,19 +327,19 @@ type Endpoint is Data:
 def Endpoint.route(e: Endpoint) -> Route:
   match e:
     case EHealth{}:
-      Route{Get{}, "/api/health", "getHealth", "Whether the web process is up", None{},
+      Route{Get{}, "/api/health", "getHealth", "Whether the web process is up", None{}, False{},
         [Answer{OK{}, "The web process is up", Schemas.health()}]}
     case ECreate{}:
-      Route{Post{}, "/api/v1/appraisals", "createAppraisal", "Request an appraisal. Sending the same key again is safe", Some{St.Schemas.draft()},
+      Route{Post{}, "/api/v1/appraisals", "createAppraisal", "Request an appraisal. Sending the same key again is safe", Some{St.Schemas.draft()}, True{},
         [Answer{Created{}, "The appraisal was requested", St.Schemas.appraisal()},
          Answer{OK{}, "An appraisal with this key was already requested, so nothing changed", St.Schemas.appraisal()},
          Answer{Unprocessable{}, "The request breaks a rule, which error names", Schemas.error()}]}
     case EFetch{}:
-      Route{Get{}, "/api/v1/appraisals/{id}", "getAppraisal", "Read an appraisal", None{},
+      Route{Get{}, "/api/v1/appraisals/{id}", "getAppraisal", "Read an appraisal", None{}, False{},
         [Answer{OK{}, "The appraisal", St.Schemas.appraisal()},
          Answer{NotFound{}, "No appraisal has this id", Schemas.error()}]}
     case ECancel{}:
-      Route{Post{}, "/api/v1/appraisals/{id}/cancel", "cancelAppraisal", "Cancel an appraisal. Cancelling one that's already cancelled changes nothing", None{},
+      Route{Post{}, "/api/v1/appraisals/{id}/cancel", "cancelAppraisal", "Cancel an appraisal. Cancelling one that's already cancelled changes nothing", None{}, True{},
         [Answer{OK{}, "The appraisal, now cancelled", St.Schemas.appraisal()},
          Answer{NotFound{}, "No appraisal has this id", Schemas.error()},
          Answer{Conflict{}, "The appraisal is underway or completed, so it can't be cancelled", Schemas.error()}]}
@@ -575,9 +582,8 @@ def Text.skip.go(s: String, hit: Bool) -> String:
 def Text.skip(+s: String) -> String:
   Text.skip.go(s, Text.blank(s))
 
-# Empty lines before the request line are ignored, as RFC 9112 asks.
 def Http.line(text: String) -> Maybe<&2, Line>:
-  Http.method(Text.cut(32n, Text.skip(text)))
+  Http.method(Text.cut(32n, text))
 
 def Http.body(send: Bool, body: String) -> String:
   match send:
@@ -650,20 +656,8 @@ def Http.length(lines: List<&2, String>) -> Nat:
     case Con{+line, rest}:
       Http.length.pick(String.starts_with(String.to_lower(line), "content-length:"), line, Http.length(rest))
 
-def Http.enough(ended: Bool, +text: String) -> Bool:
-  match ended:
-    case True{}:
-      Nat.is_le(Http.length(String.lines(Http.head(text))), J.Text.bytes(Http.payload(text), 0n))
-    case False{}:
-      False{}
-
-# Whether text holds the whole request: the headers and as many body bytes as
-# Content-Length says. The shell reads until it does.
-def Http.complete(+text: String) -> Bool:
-  Http.enough(String.contains(text, "\r\n\r\n"), text)
-
-# The same question of the bytes read so far, which is what the shell holds.
-# A String can't count a character cut in two at the end of a read.
+# Whether the bytes read so far hold the whole request. The shell holds bytes,
+# because a String can't count a character cut in two at the end of a read.
 
 # The byte that would carry a run of CR LF CR LF on: CR after none or two,
 # LF after one or three.
@@ -714,8 +708,32 @@ def Http.ready.at(m: Maybe<&2, Nat>, +bs: List<&2, U32>, +total: Nat) -> Bool:
 def Http.ready.go(+bs: List<&2, U32>, +total: Nat) -> Bool:
   Http.ready.at(Http.mark(total, bs, 0n, 0n, False{}), bs, total)
 
-def Http.ready(+bs: List<&2, U32>) -> Bool:
+# Whether bs starts with a CR or an LF byte.
+def Http.lead.blank(bs: List<&2, U32>) -> Bool:
+  match bs:
+    case Con{+b, t}:
+      Nat.is_eq(U32.to_nat(b), 13n) || Nat.is_eq(U32.to_nat(b), 10n)
+    case Nil{}:
+      False{}
+
+# bs without its leading CR and LF bytes. hit says bs starts with one.
+def Http.lead.go(bs: List<&2, U32>, hit: Bool) -> List<&2, U32>:
+  match bs hit:
+    case Con{b, +t} True{}:
+      Http.lead.go(t, Http.lead.blank(t))
+    case rest other:
+      rest
+
+def Http.lead(+bs: List<&2, U32>) -> List<&2, U32>:
+  Http.lead.go(bs, Http.lead.blank(bs))
+
+def Http.ready.from(+bs: List<&2, U32>) -> Bool:
   Http.ready.go(bs, List.length(&2, U32, bs))
+
+# Whether bs holds a whole request: its headers have ended, after any empty
+# lines before the request line, and the body has Content-Length bytes.
+def Http.ready(+bs: List<&2, U32>) -> Bool:
+  Http.ready.from(Http.lead(bs))
 
 # Paths
 # -----
@@ -898,10 +916,14 @@ def Api.dispatch(line: Maybe<&2, Line>, body: String, +store: St.Store) -> Handl
     case None{}:
       Handled{Api.error(BadRequest{}, "", "bad_request", True{}), None{}}
 
-# The whole web handler: request text and the store in, the response and the
-# change to log out.
-def Api.handle(+text: String, +store: St.Store) -> Handled:
+def Api.handled(+text: String, +store: St.Store) -> Handled:
   Api.dispatch(Http.line(text), Http.payload(text), store)
+
+# The whole web handler: request text and the store in, the response and the
+# change to log out. Empty lines before the request line are ignored, as RFC
+# 9112 asks, so they can't be taken for the end of the headers either.
+def Api.handle(+text: String, +store: St.Store) -> Handled:
+  Api.handled(Text.skip(text), store)
 
 def Handled.response(h: Handled) -> String:
   match h:

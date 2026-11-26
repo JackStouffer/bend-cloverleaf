@@ -58,7 +58,8 @@ export function validate(spec, schema, value, at = "$") {
   }
 }
 
-// The spec's operation for a method and a concrete path, with its parameters.
+// The spec's operation for a method and a concrete path, with its parameters
+// as raw segments, the way the server matches them, so no escape is decoded.
 export function operation(spec, method, path) {
   const segs = path.split("?")[0].split("/");
   for (const [template, ops] of Object.entries(spec.paths)) {
@@ -67,7 +68,7 @@ export function operation(spec, method, path) {
     const params = {};
     const fits = parts.every((p, i) => {
       if (p.startsWith("{")) {
-        params[p.slice(1, -1)] = decodeURIComponent(segs[i]);
+        params[p.slice(1, -1)] = segs[i];
         return segs[i] !== "";
       }
       return p === segs[i];
@@ -77,7 +78,7 @@ export function operation(spec, method, path) {
   return undefined;
 }
 
-// The published answer for a status: its exact code, or the 4XX range.
+// The published answer for a status: its exact code, or its range, like 4XX.
 export function answer(op, status) {
   return op.responses[String(status)] ?? op.responses[`${String(status)[0]}XX`];
 }

@@ -187,6 +187,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description The change could not be saved, so nothing changed and the request can be sent again */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     getAppraisal: {
@@ -269,6 +278,15 @@ export interface operations {
             };
             /** @description The request was refused */
             "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The change could not be saved, so nothing changed and the request can be sent again */
+            "5XX": {
                 headers: {
                     [name: string]: unknown;
                 };

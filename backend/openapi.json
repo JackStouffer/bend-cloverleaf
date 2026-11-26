@@ -87,6 +87,16 @@
                 }
               }
             }
+          },
+          "5XX": {
+            "description": "The change could not be saved, so nothing changed and the request can be sent again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -186,6 +196,16 @@
           },
           "4XX": {
             "description": "The request was refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "The change could not be saved, so nothing changed and the request can be sent again",
             "content": {
               "application/json": {
                 "schema": {

@@ -111,7 +111,7 @@ def Spec.walk(routes: List<&2, A.Route>, acc: List<&2, S.Schema>) -> List<&2, S.
   match routes:
     case Nil{}:
       acc
-    case Con{A.Route{m, p, i, sum, b, as}, rest}:
+    case Con{A.Route{m, p, i, sum, b, w, as}, rest}:
       Spec.walk(rest, Spec.answers(as, Spec.body(b, acc)))
 
 # Every object the table uses, in order of first use, repeats included. The
@@ -187,13 +187,21 @@ def Spec.content(s: S.Schema) -> J.Json:
 def Spec.response(d: String, s: S.Schema) -> J.Json:
   J.JObj{J.JField{"description", J.JStr{d}, J.JField{"content", Spec.content(s), J.JNil{}}}}
 
-# The route's own answers, then the dispatcher's errors.
-def Spec.responses(as: List<&2, A.Answer>) -> J.Json:
+# The shell's 500, on a route that can write to the log.
+def Spec.unsaved(writes: Bool) -> J.Json:
+  match writes:
+    case True{}:
+      J.JField{"5XX", Spec.response("The change could not be saved, so nothing changed and the request can be sent again", A.Schemas.error()), J.JNil{}}
+    case False{}:
+      J.JNil{}
+
+# The route's own answers, then the dispatcher's errors, then the shell's.
+def Spec.responses(+writes: Bool, as: List<&2, A.Answer>) -> J.Json:
   match as:
     case Nil{}:
-      J.JField{"4XX", Spec.response("The request was refused", A.Schemas.error()), J.JNil{}}
+      J.JField{"4XX", Spec.response("The request was refused", A.Schemas.error()), Spec.unsaved(writes)}
     case Con{A.Answer{st, d, s}, rest}:
-      J.JField{Nat.show(A.Status.code(st)), Spec.response(d, s), Spec.responses(rest)}
+      J.JField{Nat.show(A.Status.code(st)), Spec.response(d, s), Spec.responses(writes, rest)}
 
 # A path segment {name} without its braces.
 def Spec.param.name(+seg: String) -> String:
@@ -239,11 +247,11 @@ def Spec.request(b: Maybe<&2, S.Schema>, rest: J.Json) -> J.Json:
 
 def Spec.operation(r: A.Route) -> J.Json:
   match r:
-    case A.Route{m, p, i, sum, b, as}:
+    case A.Route{m, p, i, sum, b, w, as}:
       J.JObj{J.JField{"operationId", J.JStr{i},
         J.JField{"summary", J.JStr{sum},
           Spec.params(p, Spec.request(b,
-            J.JField{"responses", J.JObj{Spec.responses(as)}, J.JNil{}}))}}}
+            J.JField{"responses", J.JObj{Spec.responses(w, as)}, J.JNil{}}))}}}
 
 def Spec.method.pick(same: Bool, +r: A.Route, rest: J.Json) -> J.Json:
   match same:

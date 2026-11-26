@@ -847,6 +847,23 @@ def web.ascii(s: String) -> List<&2, U32>:
 def web.found(+s: St.Store, id: String) -> Bool:
   Maybe.is_some(&2, St.Rec, St.Store.find(id, St.Store.recs(s)))
 
+def web.lines(rs: List<&2, St.Rec>) -> String:
+  match rs:
+    case Nil{}:
+      ""
+    case Con{r, rest}:
+      St.Rec.line(r) ++ web.lines(rest)
+
+# A snapshot's text, the way the shell writes it a line at a time.
+def web.snaptext(n: Nat, +s: St.Store) -> String:
+  St.Snapshot.head(n, s) ++ web.lines(St.Store.recs(s))
+
+def web.load(text: String) -> Maybe<&2, St.Snap>:
+  St.Load.finish(St.Load.feed(web.ascii(text), St.Load.start()))
+
+def web.loads(text: String) -> Bool:
+  Maybe.is_some(&2, St.Snap, web.load(text))
+
 def web.snap(m: Maybe<&2, St.Snap>) -> Bool:
   match m:
     case Some{St.Snap{n, +s}}:
@@ -880,6 +897,11 @@ def web.replayed(+r: St.Replay) -> Bool:
 
 def web.skipped(+r: St.Replay) -> Bool:
   Nat.is_eq(St.Replay.lines(r), 3n) && Bool.not(web.found(St.Replay.store(r), "a1"))
+
+# A log whose last line was torn by a failed write, then a cancel written after
+# it, on a store holding a1 and a2.
+def web.after_tear(torn: Bool) -> St.Store:
+  St.Replay.store(St.Replay.finish(St.Replay.feed(web.ascii("{\"requested\":{\"id\":\"a3\"" ++ St.Change.line.after(torn, St.Cancelled{"a1"})), St.Replay.start(0n, web.two()))))
 
 def web.not_found() -> String:
   "{\"error\":\"not_found\",\"detail\":\"No appraisal has this id\"}"
@@ -934,10 +956,20 @@ def web_checks() -> List<&2, Check>:
    Check{"replay applies good lines, counts bad ones and a torn one", web.replayed(St.Replay.finish(web.replay()))},
    Check{"replay notices a torn last line", St.Replay.torn(web.replay())},
    Check{"replay skips the lines a snapshot already holds", web.skipped(St.Replay.feed(web.ascii(web.log()), St.Replay.start(1n, St.Store.empty())))},
-   Check{"a snapshot reads back", web.snap(St.Snapshot.parse(St.Snapshot.text(7n, web.two())))},
-   Check{"a snapshot cut short doesn't read", Bool.not(Maybe.is_some(&2, St.Snap, St.Snapshot.parse(String.take(St.Snapshot.text(7n, web.two()), 40n))))},
+   Check{"a snapshot reads back", web.snap(web.load(web.snaptext(7n, web.two())))},
+   Check{"a snapshot cut short doesn't load", Bool.not(web.loads(String.take(web.snaptext(7n, web.two()), 40n)))},
+   Check{"a snapshot missing its last record doesn't load", Bool.not(web.loads(St.Snapshot.head(7n, web.two()) ++ web.lines(St.Store.recs(web.store([web.create("k1")])))))},
+   Check{"a snapshot with a record past its head's count doesn't load", Bool.not(web.loads(St.Snapshot.head(7n, web.store([web.create("k1")])) ++ web.lines(St.Store.recs(web.two()))))},
+   Check{"an empty file isn't a snapshot", Bool.not(web.loads(""))},
+   Check{"a store with no appraisals has a snapshot", web.loads(web.snaptext(0n, St.Store.empty()))},
+   Check{"after a torn write, the next change starts its own line and replays", web.cancelled_in(web.after_tear(True{}))},
+   Check{"without that newline, the torn line swallows the next change", Bool.not(web.cancelled_in(web.after_tear(False{})))},
+   Check{"empty lines before a POST don't become its body", web.answers(St.Store.empty(), "\r\n" ++ web.create("k1"), "201 Created", web.rec("a1", "k1", "open"))},
+   Check{"empty lines before the request line don't end its headers", Bool.and(WA.Http.ready(web.ascii("\r\nP / HTTP/1.1\r\nContent-Length: 2\r\n\r\nab")), Bool.not(WA.Http.ready(web.ascii("\r\n\r\nP / HTTP/1.1\r\nContent-Length: 2\r\n\r\n"))))},
    Check{"UTF-8 bytes decode to characters", WJ.Text.same(U.Utf8.decode([99, 97, 102, 195, 169, 240, 159, 152, 128]), "caf\u{e9}\u{1f600}")},
    Check{"a bad or cut-off UTF-8 byte becomes U+FFFD", WJ.Text.same(U.Utf8.decode([97, 255, 98, 195]), "a\u{fffd}b\u{fffd}")},
+   Check{"a surrogate, an overlong form and a code point past U+10FFFF become U+FFFD", WJ.Text.same(U.Utf8.decode([237, 160, 128, 224, 128, 175, 244, 144, 128, 128]), "\u{fffd}\u{fffd}\u{fffd}\u{fffd}\u{fffd}\u{fffd}\u{fffd}\u{fffd}\u{fffd}\u{fffd}")},
+   Check{"the edges of each lead byte's range still decode", WJ.Text.same(U.Utf8.decode([224, 160, 128, 237, 159, 191, 240, 144, 128, 128, 244, 143, 191, 191]), "\u{800}\u{d7ff}\u{10000}\u{10ffff}")},
    Check{"a request with no body is whole once its headers end", Bool.and(WA.Http.ready(web.ascii("GET / HTTP/1.1\r\n\r\n")), Bool.not(WA.Http.ready(web.ascii("GET / HTTP/1.1\r\nHost: x\r\n"))))},
    Check{"a request with a body waits for Content-Length bytes", Bool.and(WA.Http.ready(web.ascii("POST / HTTP/1.1\r\ncontent-length: 2\r\n\r\nab")), Bool.not(WA.Http.ready(web.ascii("POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\na"))))},
    Check{"Content-Length counts bytes, not characters", Bool.and(WA.Http.ready(web.sized([195, 169])), Bool.not(WA.Http.ready(web.sized([195]))))},

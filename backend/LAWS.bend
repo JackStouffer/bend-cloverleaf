@@ -730,6 +730,14 @@ law new_appraisal_is_open:
   for +d: WSt.Draft
   {WSt.Rec.status(WSt.Rec.new(id, d)) == T.Open{} : T.Status}
 
+# A request that writes to the log is on a route that publishes the 500 the
+# shell sends when the log can't be written.
+law writes_publish_not_saved:
+  for +op: WA.Op
+  for +c: WSt.Change
+  for +w: {WA.Api.change(op) == Some{c} : Maybe<&2, WSt.Change>}
+  {WA.Route.writes(WA.Op.route(op)) == True{} : Bool}
+
 # Reading and cancelling
 # ----------------------
 

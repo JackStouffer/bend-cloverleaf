@@ -29,6 +29,21 @@ def Utf8.in(+n: Nat, lo: Nat, hi: Nat) -> Bool:
 def Utf8.cont(+n: Nat) -> Bool:
   Utf8.in(n, 128n, 191n)
 
+def Utf8.or(hit: Bool, a: Nat, b: Nat) -> Nat:
+  match hit:
+    case True{}:
+      a
+    case False{}:
+      b
+
+# The second byte of a three- or four-byte character has a narrower range after
+# some lead bytes, so no character is overlong, a surrogate, or past U+10FFFF:
+# A0-BF after E0, 80-9F after ED, 90-BF after F0, and 80-8F after F4.
+def Utf8.second(+b: Nat, +c1: Nat) -> Bool:
+  Utf8.in(c1,
+    Utf8.or(Nat.is_eq(b, 224n), 160n, Utf8.or(Nat.is_eq(b, 240n), 144n, 128n)),
+    Utf8.or(Nat.is_eq(b, 237n), 159n, Utf8.or(Nat.is_eq(b, 244n), 143n, 191n)))
+
 def Utf8.nat(m: Maybe<&2, U32>) -> Nat:
   match m:
     case None{}:
@@ -50,12 +65,12 @@ def Utf8.keep(ok: Bool, code: Nat, width: Nat) -> Glyph:
 def Utf8.two(b: Nat, +c1: Nat) -> Glyph:
   Utf8.keep(Utf8.cont(c1), Nat.add(Nat.mul(Nat.sub(b, 192n), 64n), Nat.sub(c1, 128n)), 2n)
 
-def Utf8.three(b: Nat, +c1: Nat, +c2: Nat) -> Glyph:
-  Utf8.keep(Utf8.cont(c1) && Utf8.cont(c2),
+def Utf8.three(+b: Nat, +c1: Nat, +c2: Nat) -> Glyph:
+  Utf8.keep(Utf8.second(b, c1) && Utf8.cont(c2),
     Nat.add(Nat.add(Nat.mul(Nat.sub(b, 224n), 4096n), Nat.mul(Nat.sub(c1, 128n), 64n)), Nat.sub(c2, 128n)), 3n)
 
-def Utf8.four(b: Nat, +c1: Nat, +c2: Nat, +c3: Nat) -> Glyph:
-  Utf8.keep(Utf8.cont(c1) && Utf8.cont(c2) && Utf8.cont(c3),
+def Utf8.four(+b: Nat, +c1: Nat, +c2: Nat, +c3: Nat) -> Glyph:
+  Utf8.keep(Utf8.second(b, c1) && Utf8.cont(c2) && Utf8.cont(c3),
     Nat.add(Nat.add(Nat.add(Nat.mul(Nat.sub(b, 240n), 262144n), Nat.mul(Nat.sub(c1, 128n), 4096n)), Nat.mul(Nat.sub(c2, 128n), 64n)), Nat.sub(c3, 128n)), 4n)
 
 def Utf8.pick(hit: Bool, g: Glyph, rest: Glyph) -> Glyph:

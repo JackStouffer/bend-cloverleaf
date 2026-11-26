@@ -57,12 +57,13 @@ def Schemas.event() -> S.Schema:
     S.SOpt{"requested", Schemas.appraisal(),
       S.SOpt{"cancelled", S.SStr{}, S.SEnd{}}})
 
-# The store after the log's first `events` lines.
+# The first line of a snapshot: the store after the log's first `events`
+# lines holds `appraisals` records, and `count` were ever requested.
 def Schemas.snapshot() -> S.Schema:
-  S.Schema.obj("Snapshot",
+  S.Schema.obj("SnapshotHead",
     S.SField{"events", S.SNat{},
       S.SField{"count", S.SNat{},
-        S.SField{"appraisals", S.Schema.list(Schemas.appraisal()), S.SEnd{}}}})
+        S.SField{"appraisals", S.SNat{}, S.SEnd{}}}})
 
 def StateTag() -> Data:
   S.Tag(Enums.states())
@@ -384,46 +385,173 @@ def Change.parse(line: String) -> Maybe<&2, Change>:
 # Snapshots
 # ---------
 
+# A snapshot is a head line, then one record per line, newest first, so the
+# shell writes and reads it a line at a time and never holds it whole. One cut
+# off by a crash has fewer records than its head says, and doesn't load.
+
 type Snap is Data:
   Snap{events: Nat, store: Store}
 
-def Recs.values(rs: List<&2, Rec>) -> List<&2, S.Value(Schemas.appraisal())>:
-  match rs:
-    case Nil{}:
-      []
-    case Con{r, rest}:
-      Rec.value(r) <> Recs.values(rest)
+type Head is Data:
+  Head{events: Nat, count: Nat, size: Nat}
 
-def Recs.of(vs: List<&2, S.Value(Schemas.appraisal())>) -> List<&2, Rec>:
-  match vs:
-    case Nil{}:
-      []
-    case Con{v, rest}:
-      Rec.of(v) <> Recs.of(rest)
+def Head.value(n: Nat, c: Nat, k: Nat) -> S.Value(Schemas.snapshot()):
+  (n, (c, (k, Unit{})))
 
-def Snap.value(n: Nat, s: Store) -> S.Value(Schemas.snapshot()):
-  match s:
-    case Store{c, rs}:
-      (n, (c, (Recs.values(rs), Unit{})))
-
-def Snap.of(v: S.Value(Schemas.snapshot())) -> Snap:
+def Head.of(v: S.Value(Schemas.snapshot())) -> Head:
   (n, r1) = v
   (c, r2) = r1
-  (vs, u) = r2
-  Snap{n, Store{c, Recs.of(vs)}}
+  (k, u) = r2
+  Head{n, c, k}
 
-def Snapshot.write(n: Nat, s: Store) -> J.Json:
-  S.encode(Schemas.snapshot(), Snap.value(n, s))
+def Snapshot.head(n: Nat, +s: Store) -> String:
+  J.Json.print(S.encode(Schemas.snapshot(), Head.value(n, Store.count(s), List.length(&2, Rec, Store.recs(s))))) ++ "\n"
 
-def Snapshot.found(m: Maybe<&2, S.Value(Schemas.snapshot())>) -> Maybe<&2, Snap>:
+def Rec.line(r: Rec) -> String:
+  J.Json.print(S.encode(Schemas.appraisal(), Rec.value(r))) ++ "\n"
+
+def Head.found(m: Maybe<&2, S.Value(Schemas.snapshot())>) -> Maybe<&2, Head>:
   match m:
     case None{}:
       None{}
     case Some{v}:
-      Some{Snap.of(v)}
+      Some{Head.of(v)}
 
-def Snapshot.read(j: J.Json) -> Maybe<&2, Snap>:
-  Snapshot.found(S.decode(Schemas.snapshot(), j))
+def Head.json(m: Maybe<&2, J.Json>) -> Maybe<&2, Head>:
+  match m:
+    case None{}:
+      None{}
+    case Some{j}:
+      Head.found(S.decode(Schemas.snapshot(), j))
+
+def Head.parse(line: String) -> Maybe<&2, Head>:
+  Head.json(J.Json.parse(line))
+
+def Rec.found(m: Maybe<&2, S.Value(Schemas.appraisal())>) -> Maybe<&2, Rec>:
+  match m:
+    case None{}:
+      None{}
+    case Some{v}:
+      Some{Rec.of(v)}
+
+def Rec.json(m: Maybe<&2, J.Json>) -> Maybe<&2, Rec>:
+  match m:
+    case None{}:
+      None{}
+    case Some{j}:
+      Rec.found(S.decode(Schemas.appraisal(), j))
+
+def Rec.parse(line: String) -> Maybe<&2, Rec>:
+  Rec.json(J.Json.parse(line))
+
+# Load state while the shell reads a snapshot in chunks of bytes. head is None
+# until the head line is read. ok turns False at a line that isn't what the
+# snapshot needs there, or that's longer than any record, and then the rest is
+# ignored. got counts the records read, recs holds them oldest first, and line
+# holds the bytes of the line being read, reversed, with width counting them.
+type Load is Data:
+  Load{head: Maybe<&2, Head>, ok: Bool, got: Nat, recs: List<&2, Rec>, line: List<&2, U32>, width: Nat}
+
+def Load.start() -> Load:
+  Load{None{}, True{}, 0n, [], [], 0n}
+
+def Load.broken() -> Load:
+  Load{None{}, False{}, 0n, [], [], 0n}
+
+def Load.rec(m: Maybe<&2, Rec>, h: Head, got: Nat, recs: List<&2, Rec>) -> Load:
+  match m:
+    case Some{r}:
+      Load{Some{h}, True{}, Nat.add(got, 1n), r <> recs, [], 0n}
+    case None{}:
+      Load.broken()
+
+def Load.head(m: Maybe<&2, Head>) -> Load:
+  match m:
+    case Some{h}:
+      Load{Some{h}, True{}, 0n, [], [], 0n}
+    case None{}:
+      Load.broken()
+
+def Load.text(head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>, text: String) -> Load:
+  match head:
+    case None{}:
+      Load.head(Head.parse(text))
+    case Some{h}:
+      Load.rec(Rec.parse(text), h, got, recs)
+
+# The line just read ends.
+def Load.end(ok: Bool, head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>, line: List<&2, U32>) -> Load:
+  match ok:
+    case True{}:
+      Load.text(head, got, recs, U.Utf8.decode(List.reverse(&2, U32, line)))
+    case False{}:
+      Load.broken()
+
+def Load.grow(fits: Bool, b: U32, head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>, line: List<&2, U32>, width: Nat) -> Load:
+  match fits:
+    case True{}:
+      Load{head, True{}, got, recs, b <> line, Nat.add(width, 1n)}
+    case False{}:
+      Load.broken()
+
+def Load.add(ok: Bool, b: U32, head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>, line: List<&2, U32>, +width: Nat) -> Load:
+  match ok:
+    case True{}:
+      Load.grow(Nat.is_lt(width, 65536n), b, head, got, recs, line, width)
+    case False{}:
+      Load.broken()
+
+def Load.step(newline: Bool, b: U32, head: Maybe<&2, Head>, ok: Bool, got: Nat, recs: List<&2, Rec>, line: List<&2, U32>, width: Nat) -> Load:
+  match newline:
+    case True{}:
+      Load.end(ok, head, got, recs, line)
+    case False{}:
+      Load.add(ok, b, head, got, recs, line, width)
+
+def Load.push(newline: Bool, b: U32, l: Load) -> Load:
+  match l:
+    case Load{head, ok, got, recs, line, width}:
+      Load.step(newline, b, head, ok, got, recs, line, width)
+
+def Load.feed.go(fuel: Nat, bs: List<&2, U32>, l: Load) -> Load:
+  match fuel bs:
+    case 0n _:
+      l
+    case 1n+f Nil{}:
+      l
+    case 1n+f Con{+b, rest}:
+      Load.feed.go(f, rest, Load.push(Nat.is_eq(U32.to_nat(b), 10n), b, l))
+
+def Load.feed(+bs: List<&2, U32>, l: Load) -> Load:
+  Load.feed.go(List.length(&2, U32, bs), bs, l)
+
+def Load.check(fits: Bool, n: Nat, c: Nat, recs: List<&2, Rec>) -> Maybe<&2, Snap>:
+  match fits:
+    case True{}:
+      Some{Snap{n, Store{c, List.reverse(&2, Rec, recs)}}}
+    case False{}:
+      None{}
+
+def Load.snap(head: Maybe<&2, Head>, +got: Nat, recs: List<&2, Rec>) -> Maybe<&2, Snap>:
+  match head:
+    case None{}:
+      None{}
+    case Some{Head{n, +c, +k}}:
+      Load.check(Nat.is_eq(k, got) && Nat.is_le(k, c), n, c, recs)
+
+def Load.done(whole: Bool, head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>) -> Maybe<&2, Snap>:
+  match whole:
+    case True{}:
+      Load.snap(head, got, recs)
+    case False{}:
+      None{}
+
+# The snapshot, once the whole file has been fed in, or None if it isn't one,
+# like one a crash cut off while it was written.
+def Load.finish(l: Load) -> Maybe<&2, Snap>:
+  match l:
+    case Load{head, ok, got, recs, line, width}:
+      Load.done(ok && List.is_empty(&2, U32, line), head, got, recs)
 
 # Replaying the log
 # -----------------
@@ -513,20 +641,19 @@ def Replay.store(r: Replay) -> Store:
     case Replay{n, skip, bad, s, line}:
       s
 
-def Snapshot.parsed(m: Maybe<&2, J.Json>) -> Maybe<&2, Snap>:
-  match m:
-    case None{}:
-      None{}
-    case Some{j}:
-      Snapshot.read(j)
-
-# The snapshot file's text, or None if it isn't a snapshot, like one cut off
-# by a crash while it was written.
-def Snapshot.parse(text: String) -> Maybe<&2, Snap>:
-  Snapshot.parsed(J.Json.parse(text))
-
-def Snapshot.text(n: Nat, s: Store) -> String:
-  J.Json.print(Snapshot.write(n, s))
-
 def Change.line(c: Change) -> String:
   J.Json.print(Change.write(c)) ++ "\n"
+
+def Change.line.mend(torn: Bool, line: String) -> String:
+  match torn:
+    case True{}:
+      "\n" ++ line
+    case False{}:
+      line
+
+# A change's line, written after a write that failed partway when torn is
+# True. It then starts with a newline, so a torn line the failure left stays a
+# bad line of its own and can't swallow this change. A failure that wrote
+# nothing leaves an empty line, which replay counts as a bad line.
+def Change.line.after(torn: Bool, c: Change) -> String:
+  Change.line.mend(torn, Change.line(c))

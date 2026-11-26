@@ -315,6 +315,17 @@ def Laws.broken_request_writes_nothing(d, id, c, t, p):
 def Laws.broken_request_answers_422(d, id, c, t, p):
   PSt.broken_request_is_refused(d, id, c, t, p)
 
+def Laws.writes_publish_not_saved(op, c, w):
+  match op:
+    case WA.Health{}:
+      L.never({WA.Route.writes(WA.Op.route(WA.Health{})) == True{} : Bool}, Equal.cong(Maybe<&2, WSt.Change>, Bool, m => Maybe.is_some(&2, WSt.Change, m), None{}, Some{c}, w))
+    case WA.Create{d, k, i}:
+      {==}
+    case WA.Fetch{f}:
+      L.never({WA.Route.writes(WA.Op.route(WA.Fetch{f})) == True{} : Bool}, Equal.cong(Maybe<&2, WSt.Change>, Bool, m => Maybe.is_some(&2, WSt.Change, m), None{}, Some{c}, w))
+    case WA.Cancel{f}:
+      {==}
+
 def Laws.good_request_is_logged_open(d, id, p):
   PSt.good_request_is_logged(d, id, p)
 

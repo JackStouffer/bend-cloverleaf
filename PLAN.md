@@ -290,7 +290,7 @@ Proven so far in `LAWS.bend`, for the pure core:
 - Every route schema is well formed, so a value never sits where only items or a row belong, and an object missing a required field is refused.
 - Every error body the dispatcher sends decodes under the published `Error` schema.
 - Each component name in the spec has one definition.
-- Replaying the log in two parts gives the store the whole log gives, so a snapshot of the first n changes plus the rest equals replaying everything.
+- Replaying a list of changes in two parts gives the store the whole list gives, so a store built from the first n changes carries on with the rest as if it had seen them all.
 - Every change the log writes reads back as the same change.
 - A request with a new id is stored and found by its id, and replaying a request whose id is already stored changes nothing.
 - A request with a key that's already stored writes nothing and answers 200 with the stored appraisal.
@@ -298,6 +298,7 @@ Proven so far in `LAWS.bend`, for the pure core:
 - Reading never writes, and an unknown id answers 404 to a read or a cancel.
 - An open appraisal's cancel is logged. One that's underway or completed writes nothing and answers 409, and cancelling twice writes nothing and answers 200.
 - No route answers with a number, so no handler can send one out of range.
+- Every request that can write to the log is on a route that publishes the 500 the shell sends when the write fails.
 
 Road times use the same idea as `publish`. The search isn't proven to find anything, so a lookup walks the path it left behind against the graph and reports only what that walk confirms. A search bug shows up as a refused lookup, which the shell won't report, never as a wrong time. `Array` is a tree in Base, so laws can reason about reads directly. An array can't be copied in a proof, so `proof/road.bend` proves the Base clone gives two provably equal live copies and builds on that.
 
@@ -317,6 +318,7 @@ Not proven:
 - That the planner handles the tightest deadline first. Also covered by the scenarios.
 - That road times match reality. No law looks inside the travel time function, so swapping in real road times changes no proof.
 - That the emitted `openapi.json` means the same thing as the Bend schema. Contract tests check real responses against the spec instead.
+- That a snapshot holds the store it was written from. The shell writes and reads it as lines of text, and skips the log lines it covers by counting lines, bad ones included, and neither has a law. The scenarios cover a snapshot reading back, one cut short, and one missing its last record.
 - The JSON text parser and printer. The laws reason about the JSON tree, and `scripts/json.test.mjs` checks the text side against JavaScript's `JSON`, with seeded random values.
 - Request-line parsing and dispatch. `test/scenario.bend` covers 200, 201, 404, 405, 409, 422 and 400.
 - Reading the log a chunk of bytes at a time, decoding UTF-8, and telling when a request has all its bytes. The scenarios cover torn lines, bad lines, bad bytes and bodies with multibyte characters.
@@ -532,34 +534,36 @@ Some injected bugs were caught because a proof script stopped matching the code,
 - `web/store.bend`: drafts and their rules (key and address lengths, a 5-digit zip, a `YYYY-MM-DD` due date), the store, the `requested` and `cancelled` changes the log holds, snapshots, and a replay that takes the log's bytes a chunk at a time.
 - `web/api.bend`: an `Op` carries what a handler needs from the store, already looked up, so handlers stay pure and the laws cover every store. `Api.change` says what the log must record for a request. Paths match templates with parameters, and `Http.ready` tells from raw bytes when a request is whole.
 - `web/utf8.bend`: a UTF-8 decoder. Base has none, and a String read can cut a character in two at the end of a chunk, so the shell reads bytes.
-- `web/main.bend`: one computation owns the store and the log. Connections pass it their request over a channel and wait, so changes apply one at a time in log order. A change is appended to `events.log` before its response is sent. At startup the shell loads `snapshot.json`, replays the log lines after it, ends a torn last line, and writes a new snapshot.
+- `web/main.bend`: one computation owns the store and the log. Connections pass it their request over a channel and wait, so changes apply one at a time in log order. A change is appended to `events.log` before its response is sent. At startup the shell loads `snapshot.jsonl`, replays the log lines after it, ends a torn last line, and writes a new snapshot. Both files are read and written a line at a time, so neither is held whole. After a failed write, the next change starts on a new line.
 - `scripts/contract.mjs`: a dealer client that sends 17 requests through nginx and checks every response against `openapi.json`, with `--keep` and `--recall` for the crash test.
 
 **Proof effort**
 
 | Measure | Result |
 |---|---|
-| Laws | 23 new, in 164 lines |
-| Web code | 4,034 lines, of which 3,708 are pure |
+| Laws | 24 new, in 172 lines |
+| Web code | 3,542 lines, of which 3,206 are pure |
 | Proofs | 217 lines and 14 lemmas in `proof/store.bend`, 121 lines and 2 lemmas added to `proof/web.bend` |
 | Checking `proof/store.bend` | 1.5s |
-| Scenarios | 31 new |
+| Scenarios | 41 new |
 | `@unsafe` or foreign code | None |
 | `--verdict` | Not run: Lean isn't installed in this environment |
 
-Most laws took no proof at all. A fact about one route's answers, or a handler given a concrete status, reduces to `{==}`. The rest needed a rewrite with the hypothesis and at most a match. `handlers_stay_in_range` stopped needing a case per handler: no route's answers hold a number, and a general lemma says such a reply is always in range. The two replay laws are short inductions. The longest proof is the log's round trip, which reuses the codec round trip and adds a lemma that a record reads back from its encoded value.
+Most laws took no proof at all. A fact about one route's answers, or a handler given a concrete status, reduces to `{==}`. The rest needed a rewrite with the hypothesis and at most a match. `handlers_stay_in_range` stopped needing a case per handler: no route's answers hold a number, and a general lemma says such a reply is always in range. The two replay laws are short inductions. `writes_publish_not_saved` is a match on the request, where a request that never writes has an impossible hypothesis. The longest proof is the log's round trip, which reuses the codec round trip and adds a lemma that a record reads back from its encoded value.
 
 **Bugs**
 
 Proofs caught none. The first build hung on every request: the check for the blank line after the headers expected a carriage return as the fourth byte of `\r\n\r\n`, so a request never looked whole. The laws say nothing about the shell's bytes, and an end-to-end run found it in a minute. Scenarios now cover it. Killing the web process with a torn line in the log and a snapshot cut short brought it back with nothing lost: the torn line counted as a bad line, the broken snapshot was ignored, and the whole log was replayed.
 
+A code review then found four bugs that neither the proofs nor the tests had caught. The UTF-8 decoder let through surrogates, overlong forms and code points past U+10FFFF, because it didn't narrow the second byte after E0, ED, F0 and F4. A log write that failed partway left a torn line in the middle of the log, so the next acknowledged change was appended to it and lost on replay. The snapshot was read whole. The 500 for a failed write wasn't in the spec. The spec gap is now a law, `writes_publish_not_saved`, which would have caught it. The others are in the shell or the byte decoding, which no law covers, so scenarios cover them. Its three smaller findings were fixed too: empty lines before a POST no longer become its body, this plan no longer claims a snapshot law it lacks, and the contract script matches path parameters the way the server does.
+
 **Friction**
 
-- **No UTF-8 decoder:** Base reads a socket or file as bytes or as a String, and a String read can split a character between chunks. The decoder took 89 lines.
+- **No UTF-8 decoder:** Base reads a socket or file as bytes or as a String, and a String read can split a character between chunks. The decoder took 104 lines.
 - **No fsync or rename:** the log can't be forced to disk, so an acknowledged write survives a process crash but maybe not a power cut. The snapshot can't be written to a temporary file and renamed, so a crash mid-write leaves a broken snapshot. The shell copes by falling back to the whole log.
 - **Names:** a type called `Event` clashed with Base, so the log's entries are `Change` in Bend and `Event` in the spec.
 - **Literals:** `[195u]` is refused. A bare number is already a `U32`, and `n` makes a `Nat`.
-- **Memory:** the store is a list, so a lookup is linear, and the snapshot is parsed as one String at about 24 bytes per character. That's fine for this slice, but tens of thousands of appraisals will need an array store and a snapshot read in chunks to stay under the 512MB cap.
+- **Memory:** the store is a list, so a lookup is linear. That's fine for this slice, but tens of thousands of appraisals will need an array store. The first version read the snapshot whole, as bytes, then a String, then a JSON tree, which would have broken the 512MB cap long before the store did. It's now a head line and a line per record, read and written a line at a time.
 - **Good:** the single-writer design was one recursive def with a channel, and it worked first time. Handlers taking a resolved `Op` meant every existing law about handlers kept its wording and covered the new routes unchanged.
 
 ### Milestone 4 API contract
