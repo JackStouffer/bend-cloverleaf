@@ -18,6 +18,10 @@ import ../road/search.bend as RS
 import ../road/path.bend as RP
 import ../road/snap.bend as RN
 import ../road/lanes.bend as RL
+import ../web/json.bend as WJ
+import ../web/schema.bend as WS
+import ../web/api.bend as WA
+import ../web/openapi.bend as WO
 
 # Concrete runs through the core. The laws say what must always hold, and this
 # says the code does the useful thing on real numbers, which they don't cover.
@@ -739,6 +743,77 @@ def load_checks() -> List<&2, Check>:
    Check{"a time is read in its own direction", Nat.is_eq(Tm.minutes(load.times(), T.Appraisal.site(load.job()), load.home(0n)), 3n)},
    Check{"an unreachable pair is at least the limit", Nat.is_ge(Tm.minutes(load.times(), load.home(1n), T.Appraisal.site(load.job())), 61n)}]
 
+# The web layer
+# -------------
+
+def web.head(status: String, length: String, extra: String) -> String:
+  "HTTP/1.1 " ++ status ++ "\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: " ++ length ++ "\r\n" ++ extra ++ "\r\n"
+
+def web.is(request: String, response: String) -> Bool:
+  WJ.Text.same(WA.Api.handle(request), response)
+
+# A JSON text reads and prints back unchanged.
+def web.echo.got(m: Maybe<&2, WJ.Json>, s: String) -> Bool:
+  match m:
+    case Some{j}:
+      WJ.Text.same(WJ.Json.print(j), s)
+    case None{}:
+      False{}
+
+def web.echo(+s: String) -> Bool:
+  web.echo.got(WJ.Json.parse(s), s)
+
+def web.refused(s: String) -> Bool:
+  Bool.not(Maybe.is_some(&2, WJ.Json, WJ.Json.parse(s)))
+
+def web.err() -> WS.Schema:
+  WA.Schemas.error()
+
+def web.reads.got(m: Maybe<&2, WJ.Json>) -> Bool:
+  match m:
+    case Some{j}:
+      Maybe.is_some(&2, WS.Value(web.err()), WS.decode(web.err(), j))
+    case None{}:
+      False{}
+
+def web.reads(s: String) -> Bool:
+  web.reads.got(WJ.Json.parse(s))
+
+# Two definitions of one component name, one with an extra field.
+def web.clash() -> List<&2, WS.Schema>:
+  [WS.SObj{"A", WS.SField{"x", WS.SStr{}, WS.SEnd{}}},
+   WS.SObj{"A", WS.SField{"x", WS.SStr{}, WS.SField{"y", WS.SStr{}, WS.SEnd{}}}}]
+
+def web.twice() -> WS.Schema:
+  WS.SObj{"A", WS.SField{"x", WS.SStr{}, WS.SOpt{"x", WS.SNat{}, WS.SEnd{}}}}
+
+def web.nat(n: Nat) -> Bool:
+  Maybe.is_some(&2, Nat, WS.decode(WS.SNat{}, WJ.JNum{n}))
+
+def web_checks() -> List<&2, Check>:
+  [Check{"GET /api/health answers 200 with its body", web.is("GET /api/health HTTP/1.1\r\nHost: localhost\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
+   Check{"a query string doesn't change the route", web.is("GET /api/health?verbose=1 HTTP/1.1\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
+   Check{"the wrong method on a known path is 405 with Allow", web.is("POST /api/health HTTP/1.1\r\n\r\n", web.head("405 Method Not Allowed", "30", "Allow: GET, HEAD\r\n") ++ "{\"error\":\"method_not_allowed\"}")},
+   Check{"an unknown path is 404", web.is("GET /api/nope HTTP/1.1\r\n\r\n", web.head("404 Not Found", "21", "") ++ "{\"error\":\"not_found\"}")},
+   Check{"a request with no request line is 400", web.is("hello", web.head("400 Bad Request", "23", "") ++ "{\"error\":\"bad_request\"}")},
+   Check{"JSON prints back the way it was read", Bool.and(web.echo("{\"a\":[1,true,null,\"x\\n\"],\"b\":{}}"), web.echo("[]"))},
+   Check{"JSON numbers are whole, unsigned and at most 14 digits", Bool.and(web.refused("01"), Bool.and(web.refused("1.5"), Bool.and(web.refused("-1"), Bool.and(web.refused("123456789012345"), web.echo("12345678901234")))))},
+   Check{"broken JSON is refused", Bool.and(web.refused("[1,]"), Bool.and(web.refused("{\"a\" 1}"), Bool.and(web.refused("tru"), web.refused("\"\\ud83d\""))))},
+   Check{"an object decodes with or without its optional field", Bool.and(web.reads("{\"error\":\"x\"}"), web.reads("{\"detail\":\"y\",\"error\":\"x\"}"))},
+   Check{"an object with a missing, unknown or repeated field is refused", Bool.not(Bool.or(web.reads("{\"detail\":\"y\"}"), Bool.or(web.reads("{\"error\":\"x\",\"extra\":1}"), web.reads("{\"error\":\"x\",\"error\":\"y\"}"))))},
+   Check{"Content-Length counts UTF-8 bytes", Nat.is_eq(WJ.Text.bytes("a\u{e9}\u{1f600}", 0n), 7n)},
+   Check{"Json.small holds up to 14 digits and no further", Bool.and(WJ.Json.small(WJ.Json.Max()), Bool.not(WJ.Json.small(Nat.add(WJ.Json.Max(), 1n))))},
+   Check{"the decoder refuses a number the parser would refuse", Bool.and(web.nat(WJ.Json.Max()), Bool.not(web.nat(Nat.add(WJ.Json.Max(), 1n))))},
+   Check{"the request line ends at its first space and the path at its first ?", web.is("GET /api/health?a=1?b HTTP/1.1\r\nX-Note: a b c ? d\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
+   Check{"a request with a 200,000 byte header still parses", web.is("GET /api/health HTTP/1.1\r\nX-Pad: " ++ String.repeat("a", 200000n) ++ "\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
+   Check{"HEAD gets a GET route's headers with no body", web.is("HEAD /api/health HTTP/1.1\r\n\r\n", web.head("200 OK", "15", ""))},
+   Check{"HEAD on an unknown path is 404 with no body", web.is("HEAD /api/nope HTTP/1.1\r\n\r\n", web.head("404 Not Found", "21", ""))},
+   Check{"empty lines before the request line are ignored", web.is("\r\n\r\nGET /api/health HTTP/1.1\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
+   Check{"the spec refuses two definitions of one name", Bool.and(Bool.not(WO.Spec.agree(web.clash())), WO.Spec.agree([WA.Schemas.error(), WA.Schemas.error()]))},
+   Check{"a schema naming a field twice is not distinct", Bool.and(Bool.not(WS.Schema.distinct(web.twice())), Bool.not(WA.Answers.distinct([WA.Answer{WA.OK{}, "", web.twice()}])))},
+   Check{"items or a row in a field's place is not well formed", Bool.and(Bool.not(WS.Schema.wellformed(WS.Schema.obj("A", WS.SField{"x", WS.SItems{WS.SStr{}}, WS.SEnd{}}))), Bool.and(Bool.not(WS.Schema.wellformed(WS.SList{WS.SStr{}})), WS.Schema.wellformed(WS.Schema.list(WA.Schemas.error()))))},
+   Check{"the spec is OpenAPI 3.1", String.starts_with(WO.Spec.text(), "{\n  \"openapi\": \"3.1.0\",")}]
+
 def show(c: Check) -> String:
   match c:
     case Check{n, True{}}:
@@ -770,5 +845,5 @@ def finish(n: Nat) -> IO(Unit):
       IO.die(Unit, 1, Nat.show(n) ++ " scenarios failed")
 
 def main() -> IO(Unit):
-  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, load_checks(), List.append(&2, Check, nation_checks(), List.append(&2, Check, base_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), road_checks())))))))
+  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, load_checks(), List.append(&2, Check, nation_checks(), List.append(&2, Check, base_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), List.append(&2, Check, road_checks(), web_checks()))))))))
   IO.bind(Unit, Unit, print_all(all), u => finish(failed(all)))

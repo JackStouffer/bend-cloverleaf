@@ -11,6 +11,10 @@ import ./road/spec.bend as Sp
 import ./road/search.bend as RS
 import ./road/path.bend as RP
 import ./road/lanes.bend as RL
+import ./web/json.bend as WJ
+import ./web/schema.bend as WS
+import ./web/api.bend as WA
+import ./web/openapi.bend as WO
 
 # The rules Cloverleaf has to keep, as claims over the pure core. PROOF.bend proves
 # each one, and `bend PROOF.bend` fails until every claim holds.
@@ -530,3 +534,93 @@ law lanes_fit_the_budget:
   for +budget: Nat
   for +e: {Nat.is_le(per, budget) == True{} : Bool}
   {Nat.is_le(Nat.mul(Nat.pow(2n, RL.Lanes.fit(k, per, budget)), per), budget) == True{} : Bool}
+
+# The API contract
+# ----------------
+
+# The codecs agree: whatever a schema encodes, it decodes back to the same
+# value. JSON can't hold one object with a key twice, so it holds for schemas
+# whose objects name each field once, and every route's schemas do. The decoder
+# refuses a number over Json.Max, as the parser and the spec do, so it also
+# needs every number in the value to be in range, and every handler's are.
+law decode_undoes_encode:
+  for +s: WS.Schema
+  for +v: WS.Value(s)
+  for +e: {WS.Schema.distinct(s) == True{} : Bool}
+  for +w: {WS.Schema.within(s, v) == True{} : Bool}
+  {WS.decode(s, WS.encode(s, v)) == Some{v} : Maybe<&2, WS.Value(s)>}
+
+# A reply can only be one of its answers, so its status is one the route
+# declares and its body decodes under that status's schema.
+law replies_fit_their_answers:
+  for +as: List<&2, WA.Answer>
+  for +r: WA.Reply(as)
+  for +e: {WA.Answers.distinct(as) == True{} : Bool}
+  for +w: {WA.Reply.within(as, r) == True{} : Bool}
+  {WA.Answers.accepts(as, WA.Reply.status(as, r), WA.Reply.body(as, r)) == True{} : Bool}
+
+law route_schemas_are_distinct:
+  for +op: WA.Op
+  {WA.Answers.distinct(WA.Route.answers(WA.Op.route(op))) == True{} : Bool}
+
+# No handler replies with a number over Json.Max, the most the parser reads
+# and the maximum the spec publishes.
+law handlers_stay_in_range:
+  for +op: WA.Op
+  {WA.Reply.within(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op)) == True{} : Bool}
+
+# A value in range encodes with every number at most Json.Max.
+law encoded_numbers_fit:
+  for +s: WS.Schema
+  for +v: WS.Value(s)
+  for +w: {WS.Schema.within(s, v) == True{} : Bool}
+  {WJ.Json.fits(WS.encode(s, v)) == True{} : Bool}
+
+# So every body a handler sends is one the parser can read back.
+law every_response_parses_back:
+  for +op: WA.Op
+  {WJ.Json.fits(WA.Reply.body(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op))) == True{} : Bool}
+
+# Every response a handler sends fits the route the spec publishes for it.
+law every_handler_fits_its_route:
+  for +op: WA.Op
+  {WA.Answers.accepts(WA.Route.answers(WA.Op.route(op)),
+    WA.Reply.status(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op)),
+    WA.Reply.body(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op))) == True{} : Bool}
+
+# Each component name in the spec has one definition, so a $ref always means
+# the schema the route uses.
+law spec_names_agree:
+  {WO.Spec.agree(WO.Spec.all(WA.Api.routes(WA.Api.ops()))) == True{} : Bool}
+
+# A value schema never accepts the JNil a missing key reads as.
+law missing_value_is_refused:
+  for +s: WS.Schema
+  for +w: {WS.Schema.wellformed(s) == True{} : Bool}
+  {WS.decode(s, WJ.JNil{}) == None{} : Maybe<&2, WS.Value(s)>}
+
+# So an object without one of its required fields is refused.
+law missing_field_is_refused:
+  for +n: String
+  for +k: String
+  for +f: WS.Schema
+  for +r: WS.Schema
+  for +w: {WS.Schema.wellformed(f) == True{} : Bool}
+  {WS.decode(WS.SObj{n, WS.SField{k, f, r}}, WJ.JObj{WJ.JNil{}}) == None{} : Maybe<&2, WS.Value(WS.SObj{n, WS.SField{k, f, r}})>}
+
+# Every schema in the route table is well formed, so its required fields are
+# required.
+law route_schemas_are_wellformed:
+  for +op: WA.Op
+  {WA.Answers.wellformed(WA.Route.answers(WA.Op.route(op))) == True{} : Bool}
+
+# The dispatcher's errors are in no route's answers, but they're published as
+# the 4XX answer, so their schema is well formed too.
+law error_schema_is_wellformed:
+  {WS.Schema.wellformed(WA.Schemas.error()) == True{} : Bool}
+
+# Every error body the dispatcher sends decodes under the published Error
+# schema, back to the code it was sent with.
+law dispatcher_errors_decode:
+  for +code: String
+  {WS.decode(WA.Schemas.error(), WA.Api.error.body(code)) == Some{(code, (None{}, Unit{}))} : Maybe<&2, WS.Value(WA.Schemas.error())>}

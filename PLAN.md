@@ -150,6 +150,8 @@ compose.yaml, compose.dev.yaml
 
 `bend PROOF.bend` runs from `backend/`, and npm scripts run from `frontend/`. `openapi.json` lives in `backend/`, because the backend owns it.
 
+The web process is split the same way as the others. `web/json.bend`, `web/schema.bend`, `web/api.bend` and `web/openapi.bend` are pure, and `web/main.bend` and `web/spec.bend` are the IO shells. `npm run gen:api` runs `bend web/spec.bend` and then `openapi-typescript`, writing `backend/openapi.json` and `frontend/src/api/schema.ts`. `npm run check` and the backend image both fail if either is out of date.
+
 ### Local deployment
 
 Compose runs the app the way a real deployment would, so nothing talks to the backend directly. Only nginx publishes ports, and every other service stays on the internal Docker network.
@@ -250,7 +252,7 @@ Caps, set with Compose `mem_limit` and an equal `memswap_limit`. `road` and `roa
 | Service | Cap | Basis |
 |---|---|---|
 | `nginx` | 64MB | Static files and proxying |
-| `web` | 512MB | Unmeasured until Milestone 4 |
+| `web` | 512MB | 2.5MB resident after 5,000 health requests, measured without a cap. Remeasure with real handlers |
 | `solver` | 2GB | 58MB on the national solve with every state's road times, before events |
 | `road` | 1GB | On turn graphs, Texas runs one lane in 546MB, and 584MB on a 1,000-stop matrix |
 | `road-build` | 1GB | 746MB on the full US, with turn graphs. Run only to refresh data |
@@ -282,6 +284,12 @@ Proven so far in `LAWS.bend`, for the pure core:
 - The lane depth the shell allows fits its memory budget.
 - The optimizer never returns a worse score than its input.
 - The planner only considers open routes, on or before the deadline, with the hours left, and only urgent work leaves its zips.
+- Codecs round-trip: decoding what a schema encodes gives back the same value, for any schema whose objects name each field once and any value whose numbers are at most `Json.Max`. Every route's schemas and every handler's reply are checked for those.
+- Every reply a handler can build has a status its route declares and a body that decodes under that status's schema, and every handler's reply fits its own route.
+- Every body a handler sends has numbers the parser can read back, so the server never sends what its own client contract refuses.
+- Every route schema is well formed, so a value never sits where only items or a row belong, and an object missing a required field is refused.
+- Every error body the dispatcher sends decodes under the published `Error` schema.
+- Each component name in the spec has one definition.
 
 Road times use the same idea as `publish`. The search isn't proven to find anything, so a lookup walks the path it left behind against the graph and reports only what that walk confirms. A search bug shows up as a refused lookup, which the shell won't report, never as a wrong time. `Array` is a tree in Base, so laws can reason about reads directly. An array can't be copied in a proof, so `proof/road.bend` proves the Base clone gives two provably equal live copies and builds on that.
 
@@ -290,8 +298,6 @@ Healing is proven by construction: every edit rebuilds the route through `Route.
 Still to prove:
 
 - Replaying a snapshot plus later events equals replaying the full log.
-- Codecs round-trip.
-- Every encoded API response conforms to its route's schema.
 - Tenant isolation and role permissions hold for every request.
 
 Not proven:
@@ -304,6 +310,8 @@ Not proven:
 - That the planner handles the tightest deadline first. Also covered by the scenarios.
 - That road times match reality. No law looks inside the travel time function, so swapping in real road times changes no proof.
 - That the emitted `openapi.json` means the same thing as the Bend schema. Contract tests check real responses against the spec instead.
+- The JSON text parser and printer. The laws reason about the JSON tree, and `scripts/json.test.mjs` checks the text side against JavaScript's `JSON`, with seeded random values.
+- Request-line parsing and dispatch. `test/scenario.bend` covers 200, 404, 405 and 400.
 - The IO shell, process wiring and frontend. These rely on testing.
 - `.pbf` decoding. The Node road build sits outside the proofs and `--verdict`, so it relies on its tests and the reference router. Laws about road data can only assume what its records say.
 - That a state's graph gives the true drive time. The 40km margin was measured on Georgia only.
@@ -340,6 +348,7 @@ Synthetic data generator, one nightly multi-day solve per state, contractor assi
 HTTP/1.1, JSON, the route table and schema-driven codecs, the OpenAPI generator, event log and snapshots, password and API-key auth, the external API, organizations and roles, and process wiring. Also adds the generated client and contract tests to the existing frontend project, so the contract is proven end to end before the UI is built.
 
 **Done when:** simulated dealer clients can create, read and cancel requests using the generated spec, real responses pass contract tests, a breaking API change fails `tsc`, data survives a crash, and tenant isolation is proven.
+**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. `GET /api/health` is the only route so far. A breaking change to it fails `tsc`. Still to come: request bodies, path and query parameters, enums, auth schemes, the event log and snapshots, auth, organizations and roles, the external API, serving `openapi.json`, and contract tests against real responses through nginx.
 
 ### 5. Geocoding (M)
 
@@ -504,6 +513,44 @@ Some injected bugs were caught because a proof script stopped matching the code,
 **Friction**
 
 - **Parallel reads:** an array has one owner, so lanes can't share a read-only graph without `@unsafe`. Copying it is the largest memory cost in the road search.
+
+### Milestone 4 API contract
+
+**What was built**
+
+- `web/json.bend`: a JSON tree, a printer that matches `JSON.stringify`, and a strict parser. Numbers are whole and at most 14 digits, so nothing from outside reaches `Nat`'s trap.
+- `web/schema.bend`: schemas as data. `Value(s)` is the Bend type a schema describes, and `encode` and `decode` are driven by the schema. Objects decode strictly, so missing, unknown and repeated fields are refused.
+- `web/api.bend`: the route table, `Reply(answers)` as the type a handler returns, request-line parsing, and dispatch with 404, 405 and 400 typed by an `Error` schema.
+- `web/openapi.bend`: OpenAPI 3.1 with every object as a named component, closed with `additionalProperties: false`.
+- `frontend/scripts/gen-api.mjs`: regenerates the spec and client, or checks them for drift.
+
+**Proof effort**
+
+| Measure | Result |
+|---|---|
+| Laws | 13 new, in 89 lines |
+| Web code | 1,886 lines, of which 1,834 are pure |
+| Proofs | 336 lines and 15 lemmas in `proof/web.bend`, 0.18 proof lines per line of code |
+| Checking `proof/web.bend` | 0.5s |
+| `@unsafe` or foreign code | None |
+| `--verdict` | Not run: Lean isn't installed in this environment |
+
+The round trip took most of the proof work, and all of it was in object rows: a field's decode looks its key up in the whole object, so the proof needs "a key the rest of the row doesn't name is never found in its encoding". That's where the `Schema.distinct` precondition comes from. The reply law was short, because a reply can only be built from one of its answers.
+
+**Bugs**
+
+Proofs caught no bug in the code as written, but a code review caught two that the laws had no way to state. The decoder took any number, while the parser and the spec stop at 14 digits, so the round trip held for values the server could send but its own clients would refuse. The decoder now refuses them too, the round trip gained a `Schema.within` precondition, and `every_response_parses_back` proves every handler stays in range. The request-line parser also recursed through the whole request before deciding, so a large header cost stack for nothing. It now scans tail-recursively and stops at the first match, and a scenario sends a 200,000 byte header. The review's smaller findings were fixed too. `HEAD` now answers wherever `GET` does, and empty lines before the request line are ignored. A status is now a type with its own reason phrase, so a response can't go out as "409 Unknown". Schemas gained a well-formedness check, because a field holding a bare list of items would have accepted a missing key. Dispatcher errors gained a law. `spec_names_agree` and `route_schemas_are_distinct` are stated through the helpers they check, so scenarios now show those helpers refusing a clash and a repeated key. Two injected bugs were caught at once: a handler returning a number for a string field failed to typecheck, and a schema naming a field twice failed `route_schemas_are_distinct`. Renaming the health field in Bend made the drift check fail, and after regenerating, `tsc` rejected the frontend's use of the old name.
+
+**Friction**
+
+- **No mutual recursion:** JSON and schemas would normally hold a `List` of members, but then every walk needs a helper over the list that calls back into the walk. Both types hold their members as chains inside themselves instead, so one def can reach everything. It works, but the types allow shapes that mean nothing, like a field outside an object.
+- **Def order:** a def must come after everything it calls, so a 700-line module needed a script to sort it while it was being written.
+- **No `if` on a computed value:** every `match` on a parse result or a comparison needs its own helper def, so the parser is about 70 small defs.
+- **Pairs:** `A & B` is a `Type` and can't hold `Data` values in a schema's `Value`, so fields are `Sigma` pairs.
+- **Literals:** a `Nat` literal above 2^32 is refused, so the 14-digit limit is computed.
+- **Checker stack:** comparing a symbolic `Nat` with the computed 14-digit limit made the checker unfold the literal one step per unit and overflow its stack. `Json.small` counts digits instead, which says the same thing in a form the checker can handle.
+- **No proof irrelevance:** the natural fix for the number range was a `Nat` paired with evidence that it's in range, but two proofs of the same fact aren't equal to the checker, so such a value can't round-trip. The range became a precondition on the law instead.
+- **Good:** a type computed from data works as hoped. `Api.run` returns `Reply(Route.answers(Op.route(op)))`, and the checker reduces it to the exact shape the route declares. The `.mjs` build made checking the parser against JavaScript a 100-line test.
 
 ### Milestone 3 results
 

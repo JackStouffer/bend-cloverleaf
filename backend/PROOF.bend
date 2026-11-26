@@ -17,6 +17,8 @@ import ./proof/solve.bend as PS
 import ./proof/road.bend as PRo
 import ./proof/nation.bend as PN
 import ./core/nation.bend as N
+import ./web/api.bend as WA
+import ./proof/web.bend as PW
 
 # Proves every law in LAWS.bend. The working lemmas live in proof/, and this file
 # only connects them to the claims.
@@ -214,3 +216,48 @@ def Laws.dealing_keeps_every_job(xs):
 
 def Laws.lanes_fit_the_budget(k, per, budget, e):
   PRo.budget.fits(k, per, budget, e)
+
+def Laws.decode_undoes_encode(s, v, e, w):
+  PW.roundtrip(s, v, e, w)
+
+def Laws.replies_fit_their_answers(as, r, e, w):
+  PW.reply_fits(as, r, e, w)
+
+def Laws.route_schemas_are_distinct(op):
+  match op:
+    case WA.Health{}:
+      {==}
+
+def Laws.handlers_stay_in_range(op):
+  match op:
+    case WA.Health{}:
+      {==}
+
+def Laws.encoded_numbers_fit(s, v, w):
+  PW.encoded_fits(s, v, w)
+
+def Laws.every_response_parses_back(op):
+  PW.reply_body_fits(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op), Laws.handlers_stay_in_range(op))
+
+def Laws.every_handler_fits_its_route(op):
+  PW.reply_fits(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op), Laws.route_schemas_are_distinct(op), Laws.handlers_stay_in_range(op))
+
+def Laws.spec_names_agree():
+  {==}
+
+def Laws.missing_value_is_refused(s, w):
+  PW.missing_value_refused(s, w)
+
+def Laws.missing_field_is_refused(n, k, f, r, w):
+  PW.missing_field_refused(n, k, f, r, w)
+
+def Laws.route_schemas_are_wellformed(op):
+  match op:
+    case WA.Health{}:
+      {==}
+
+def Laws.error_schema_is_wellformed():
+  {==}
+
+def Laws.dispatcher_errors_decode(code):
+  PW.roundtrip(WA.Schemas.error(), (code, (None{}, Unit{})), {==}, {==})
