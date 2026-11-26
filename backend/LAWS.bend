@@ -15,6 +15,7 @@ import ./web/json.bend as WJ
 import ./web/schema.bend as WS
 import ./web/api.bend as WA
 import ./web/openapi.bend as WO
+import ./web/store.bend as WSt
 
 # The rules Cloverleaf has to keep, as claims over the pure core. PROOF.bend proves
 # each one, and `bend PROOF.bend` fails until every claim holds.
@@ -563,6 +564,12 @@ law route_schemas_are_distinct:
   for +op: WA.Op
   {WA.Answers.distinct(WA.Route.answers(WA.Op.route(op))) == True{} : Bool}
 
+# No route answers with a number at all: ids, keys, states and statuses are
+# all strings. So nothing a handler sends can be out of range.
+law route_answers_are_free:
+  for +op: WA.Op
+  {WA.Answers.free(WA.Route.answers(WA.Op.route(op))) == True{} : Bool}
+
 # No handler replies with a number over Json.Max, the most the parser reads
 # and the maximum the spec publishes.
 law handlers_stay_in_range:
@@ -624,3 +631,160 @@ law error_schema_is_wellformed:
 law dispatcher_errors_decode:
   for +code: String
   {WS.decode(WA.Schemas.error(), WA.Api.error.body(code)) == Some{(code, (None{}, Unit{}))} : Maybe<&2, WS.Value(WA.Schemas.error())>}
+
+# The appraisal store
+# -------------------
+
+# The web process keeps appraisals as a log of changes and rebuilds the store
+# by replaying it. A store replayed from part of the log carries on with the
+# rest as if it had seen the whole log.
+law replay_carries_on:
+  for +xs: List<&2, WSt.Change>
+  for +ys: List<&2, WSt.Change>
+  for +s: WSt.Store
+  {WSt.Store.replay(List.append(&2, WSt.Change, xs, ys), s) == WSt.Store.replay(ys, WSt.Store.replay(xs, s)) : WSt.Store}
+
+# So a snapshot of the store after the log's first n changes, replayed with
+# the changes after them, gives the store the whole log gives.
+law snapshot_then_rest_is_whole_log:
+  for +es: List<&2, WSt.Change>
+  for +n: Nat
+  {WSt.Store.replay(List.drop(&2, WSt.Change, es, n), WSt.Store.replay(List.take(&2, WSt.Change, es, n), WSt.Store.empty())) == WSt.Store.replay(es, WSt.Store.empty()) : WSt.Store}
+
+# Every change the log writes reads back as the same change.
+law logged_change_reads_back:
+  for +e: WSt.Change
+  {WSt.Change.read(WSt.Change.write(e)) == Some{e} : Maybe<&2, WSt.Change>}
+
+# A request with a new id is stored, and can be read back by its id.
+law request_is_stored:
+  for +s: WSt.Store
+  for +r: WSt.Rec
+  for +fresh: {WSt.Store.find(WSt.Rec.id(r), WSt.Store.recs(s)) == None{} : Maybe<&2, WSt.Rec>}
+  {WSt.Store.find(WSt.Rec.id(r), WSt.Store.recs(WSt.Store.apply(s, WSt.Requested{r}))) == Some{r} : Maybe<&2, WSt.Rec>}
+
+# Replaying a request for an id that's already stored changes nothing.
+law replayed_request_changes_nothing:
+  for +s: WSt.Store
+  for +r: WSt.Rec
+  for +x: WSt.Rec
+  for +known: {WSt.Store.find(WSt.Rec.id(r), WSt.Store.recs(s)) == Some{x} : Maybe<&2, WSt.Rec>}
+  {WSt.Store.apply(s, WSt.Requested{r}) == s : WSt.Store}
+
+# Appraisal requests
+# ------------------
+
+# Sending a key that's already stored writes nothing and answers 200 with the
+# stored appraisal, so a dealer can retry a request safely.
+law repeat_key_writes_nothing:
+  for +d: WSt.Draft
+  for +r: WSt.Rec
+  for +id: String
+  {WA.Api.change(WA.Create{d, Some{r}, id}) == None{} : Maybe<&2, WSt.Change>}
+
+law repeat_key_answers_200:
+  for +d: WSt.Draft
+  for +r: WSt.Rec
+  for +id: String
+  {WA.Op.status(WA.Create{d, Some{r}, id}) == 200n : Nat}
+
+law repeat_key_answers_the_stored_appraisal:
+  for +d: WSt.Draft
+  for +r: WSt.Rec
+  for +id: String
+  {WA.Reply.body(WA.Route.answers(WA.Op.route(WA.Create{d, Some{r}, id})), WA.Api.run(WA.Create{d, Some{r}, id})) == WS.encode(WSt.Schemas.appraisal(), WSt.Rec.value(r)) : WJ.Json}
+
+# A request that breaks a rule writes nothing and answers 422.
+law broken_request_writes_nothing:
+  for +d: WSt.Draft
+  for +id: String
+  for +c: String
+  for +t: String
+  for +p: {WSt.Draft.problem(d) == Some{WSt.Problem{c, t}} : Maybe<&2, WSt.Problem>}
+  {WA.Api.change(WA.Create{d, None{}, id}) == None{} : Maybe<&2, WSt.Change>}
+
+law broken_request_answers_422:
+  for +d: WSt.Draft
+  for +id: String
+  for +c: String
+  for +t: String
+  for +p: {WSt.Draft.problem(d) == Some{WSt.Problem{c, t}} : Maybe<&2, WSt.Problem>}
+  {WA.Op.status(WA.Create{d, None{}, id}) == 422n : Nat}
+
+# A new request that breaks no rule is logged as an open appraisal under the
+# next id, and answers 201.
+law good_request_is_logged_open:
+  for +d: WSt.Draft
+  for +id: String
+  for +p: {WSt.Draft.problem(d) == None{} : Maybe<&2, WSt.Problem>}
+  {WA.Api.change(WA.Create{d, None{}, id}) == Some{WSt.Requested{WSt.Rec.new(id, d)}} : Maybe<&2, WSt.Change>}
+
+law good_request_answers_201:
+  for +d: WSt.Draft
+  for +id: String
+  for +p: {WSt.Draft.problem(d) == None{} : Maybe<&2, WSt.Problem>}
+  {WA.Op.status(WA.Create{d, None{}, id}) == 201n : Nat}
+
+law new_appraisal_is_open:
+  for +id: String
+  for +d: WSt.Draft
+  {WSt.Rec.status(WSt.Rec.new(id, d)) == T.Open{} : T.Status}
+
+# Reading and cancelling
+# ----------------------
+
+law unknown_appraisal_answers_404:
+  {WA.Op.status(WA.Fetch{None{}}) == 404n : Nat}
+
+law cancelling_unknown_appraisal_answers_404:
+  {WA.Op.status(WA.Cancel{None{}}) == 404n : Nat}
+
+law cancelling_unknown_appraisal_writes_nothing:
+  {WA.Api.change(WA.Cancel{None{}}) == None{} : Maybe<&2, WSt.Change>}
+
+# Reading never writes.
+law reading_writes_nothing:
+  for +m: Maybe<&2, WSt.Rec>
+  {WA.Api.change(WA.Fetch{m}) == None{} : Maybe<&2, WSt.Change>}
+
+# An open appraisal is cancelled, and the log records it.
+law open_appraisal_is_cancelled:
+  for +i: String
+  for +k: String
+  for +a: String
+  for +z: String
+  for +st: WSt.StateTag()
+  for +d: String
+  {WA.Api.change(WA.Cancel{Some{WSt.Rec{i, k, a, z, st, d, T.Open{}}}}) == Some{WSt.Cancelled{i}} : Maybe<&2, WSt.Change>}
+
+# An appraisal that's underway or completed can't be cancelled: nothing is
+# written, and the answer is 409.
+law locked_appraisal_writes_nothing:
+  for +r: WSt.Rec
+  for +e: {Life.Status.locked(WSt.Rec.status(r)) == True{} : Bool}
+  {WA.Api.change(WA.Cancel{Some{r}}) == None{} : Maybe<&2, WSt.Change>}
+
+law locked_appraisal_answers_409:
+  for +r: WSt.Rec
+  for +e: {Life.Status.locked(WSt.Rec.status(r)) == True{} : Bool}
+  {WA.Op.status(WA.Cancel{Some{r}}) == 409n : Nat}
+
+# Cancelling an appraisal that's already cancelled writes nothing and answers
+# 200, so a cancel can be retried safely.
+law cancelling_twice_writes_nothing:
+  for +i: String
+  for +k: String
+  for +a: String
+  for +z: String
+  for +st: WSt.StateTag()
+  for +d: String
+  {WA.Api.change(WA.Cancel{Some{WSt.Rec{i, k, a, z, st, d, T.Cancelled{}}}}) == None{} : Maybe<&2, WSt.Change>}
+
+law cancelling_twice_answers_200:
+  for +i: String
+  for +k: String
+  for +a: String
+  for +z: String
+  for +st: WSt.StateTag()
+  for +d: String
+  {WA.Op.status(WA.Cancel{Some{WSt.Rec{i, k, a, z, st, d, T.Cancelled{}}}}) == 200n : Nat}

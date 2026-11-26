@@ -41,6 +41,11 @@ node scripts/synth.mjs data/road data/osm/outlines data/synth 1000 10000 20000  
 node scripts/nightly.mjs matrices data/synth data/road backend/build/road  # every state's road matrix, each in its own capped process
 node scripts/nightly.mjs solve data/synth backend/build/solver 12 planner  # the national solve; planner, first_fit or nearest
 docker compose --profile solver run --rm solver national /jobs/synth planner 36000 4 <state>...  # the same solve in Compose, inputs in data/jobs
+docker compose cp nginx:/etc/nginx/certs/tls.crt data/tls.crt  # the stack's certificate, for the contract tests
+node scripts/contract.mjs https://localhost:8443 data/tls.crt  # contract tests: real responses through nginx against openapi.json
+node scripts/contract.mjs https://localhost:8443 data/tls.crt --keep data/kept.json  # crash test: keep, then
+docker compose exec web bash -c 'kill -9 -1'             # kill the web process, wait for it to be healthy again, then
+node scripts/contract.mjs https://localhost:8443 data/tls.crt --recall data/kept.json  # check it all reads back
 docker build -t cloverleaf-ortools scripts/bench/ortools  # the OR-Tools comparison, benchmark only
 docker run --rm -m 2g --memory-swap 2g -v "$PWD/data/synth:/synth:ro" cloverleaf-ortools /synth/georgia 120  # needs times.bin and plan-planner.bin
 ```
@@ -70,6 +75,15 @@ Run these from `frontend/`, on Node 24:
 npm run check                         # types, lint, format and spec drift, plus tests when added
 npm run gen:api                       # regenerate backend/openapi.json and src/api/schema.ts; needs bend on PATH
 ```
+
+## Docker behind a proxy
+
+Some sandboxes have no Docker daemon running and reach the internet only through an HTTPS proxy with its own CA. The checks still run there:
+
+- Start `dockerd` by hand, and build with `--network host` and the proxy passed as `HTTPS_PROXY` build args, from a Compose override file kept outside the repo.
+- Add the proxy's CA to the base images (`ubuntu:24.04`, `node:24-alpine`, `nginx:1.28-alpine`) by building a one-line image over each and tagging it with the same name, so the repo's Dockerfiles stay unchanged.
+- If the proxy refuses the Alpine package mirror, build nginx from a copy of its Dockerfile without `apk add openssl`, and put a certificate made with the host's `openssl` in the `certs` volume first, the way `generate-cert.sh` would.
+- The `road` image needs `data/road` or about 30GB for a fresh build, so a small sandbox can build `web` and `solver` but not `road`.
 
 ## Laws and proofs
 

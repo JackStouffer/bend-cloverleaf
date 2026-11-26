@@ -73,8 +73,13 @@ USER cloverleaf
 WORKDIR /jobs
 ENTRYPOINT ["solver", "+RTS", "--threads", "6", "-RTS"]
 
+# The web process. Appraisals live in /data as an append-only log and a
+# snapshot, so /data needs a volume that outlives the container.
 FROM runtime AS web
 COPY --from=build /out/web /usr/local/bin/web
+RUN mkdir /data && chown cloverleaf:cloverleaf /data
+ENV CLOVERLEAF_DATA=/data
+VOLUME /data
 USER cloverleaf
 EXPOSE 8080
 CMD ["web", "+RTS", "--threads", "2", "-RTS"]
