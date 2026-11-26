@@ -68,14 +68,18 @@ Set the admin key in a `.env` file at the repo root, which git ignores. Use at l
 echo "CLOVERLEAF_ADMIN_KEY=$(openssl rand -hex 32)" > .env
 ```
 
-Then add an organization. The answer shows its key once, so save it:
+Start the stack, or restart it if it was already up, so the web process reads the key. Then load the key into your shell, copy out the stack's certificate, and add an organization. The answer shows its key once, so save it:
 
 ```bash
+set -a; . ./.env; set +a
+docker compose cp nginx:/etc/nginx/certs/tls.crt data/tls.crt
 curl --cacert data/tls.crt -H "Authorization: Bearer $CLOVERLEAF_ADMIN_KEY" \
   -d '{"name":"Acme Motors"}' https://localhost:8443/api/v1/organizations
 ```
 
-Without the admin key the web process still starts, and no one can add an organization.
+Without the admin key the web process still starts, and no one can add an organization. If the answer is lost, don't retry: a retry adds a second organization, and keys can't be revoked yet.
+
+A store from before organizations doesn't carry over. Its appraisals are dropped and ids start again, so clear the old data with `docker compose down -v` when upgrading.
 
 ## Repository layout
 

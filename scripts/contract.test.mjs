@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { validate, operation, conforms, envValue } from "./contract.mjs";
+import { validate, operation, conforms, envValue, keptProblem } from "./contract.mjs";
 
 const spec = JSON.parse(readFileSync(new URL("../backend/openapi.json", import.meta.url), "utf8"));
 const appraisal = {
@@ -73,4 +73,13 @@ test("reads a value out of a .env file", () => {
   assert.equal(envValue("CLOVERLEAF_ADMIN_KEY=abc # note\n", "CLOVERLEAF_ADMIN_KEY"), "abc");
   assert.equal(envValue('CLOVERLEAF_ADMIN_KEY="x=y"', "CLOVERLEAF_ADMIN_KEY"), "x=y");
   assert.equal(envValue("OTHER=1", "CLOVERLEAF_ADMIN_KEY"), undefined);
+  assert.equal(envValue('CLOVERLEAF_ADMIN_KEY="abc" # admin', "CLOVERLEAF_ADMIN_KEY"), "abc");
+  assert.equal(envValue("CLOVERLEAF_ADMIN_KEY='abc'   # admin", "CLOVERLEAF_ADMIN_KEY"), "abc");
+});
+
+test("a keep file from before organizations is refused with a plain problem", () => {
+  assert.match(keptProblem([{ id: "a1" }]), /older contract run/);
+  assert.match(keptProblem({ appraisals: [{ id: "a1" }] }), /older contract run/);
+  assert.match(keptProblem(null), /older contract run/);
+  assert.equal(keptProblem({ key: "clv_a", other: "clv_b", appraisals: [{ id: "a1" }] }), undefined);
 });

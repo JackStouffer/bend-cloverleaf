@@ -1185,6 +1185,25 @@ def Api.dispatch(line: Maybe<&2, Line>, body: String, +store: St.Store, token: M
 def Api.handled(+text: String, +store: St.Store, admin: Maybe<&2, String>, seed: List<&2, U32>) -> Handled:
   Api.dispatch(Http.line(text), Http.payload(text), store, Http.token(String.lines(Http.head(text))), admin, seed)
 
+# Whether a request asks to add an organization, the one handler that uses the
+# random bytes, so the web process reads /dev/urandom only for those.
+def Api.seeds.hit(hit: Maybe<&2, Hit>) -> Bool:
+  match hit:
+    case Some{Hit{EOrganize{}, ps}}:
+      True{}
+    case other:
+      False{}
+
+def Api.seeds.line(line: Maybe<&2, Line>) -> Bool:
+  match line:
+    case Some{Line{+m, +path}}:
+      Api.seeds.hit(Api.hit(m, path, Api.ops()))
+    case None{}:
+      False{}
+
+def Api.needs_seed(text: String) -> Bool:
+  Api.seeds.line(Http.line(Text.skip(text)))
+
 # The whole web handler: request text, the store, the admin key's hash and 32
 # random bytes in, the response and the change to log out. Empty lines before
 # the request line are ignored, as RFC 9112 asks, so they can't be taken for

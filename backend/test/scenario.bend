@@ -1118,6 +1118,8 @@ def web_checks() -> List<&2, Check>:
    Check{"another organization's appraisal can't be cancelled", Bool.and(web.answers(web.two(), web.cancel.as(web.bearer(web.key2()), "a1"), "404 Not Found", web.not_found()), Bool.not(web.writes(web.two(), web.cancel.as(web.bearer(web.key2()), "a1"))))},
    Check{"two organizations can use the same idempotency key", web.answers(web.two(), web.create.as(web.bearer(web.key2()), "k1"), "201 Created", web.rec.of("a3", "o2", "k1", "open"))},
    Check{"a repeated key still finds the caller's own appraisal", web.answers(web.store([web.create("k1"), web.create.as(web.bearer(web.key2()), "k1")]), web.create("k1"), "200 OK", web.rec("a1", "k1", "open"))},
+   Check{"only a request to add an organization reads random bytes", Bool.and(WA.Api.needs_seed(web.organize("Cedar")), Bool.and(Bool.not(WA.Api.needs_seed(web.create("k1"))), Bool.and(Bool.not(WA.Api.needs_seed(web.get("/api/v1/appraisals/a1"))), Bool.not(WA.Api.needs_seed("GET /api/health HTTP/1.1\r\n\r\n")))))},
+   Check{"a request with empty lines before it is still seen as adding an organization", WA.Api.needs_seed("\r\n" ++ web.organize("Cedar"))},
    Check{"the spec is OpenAPI 3.1", String.starts_with(WO.Spec.text(), "{\n  \"openapi\": \"3.1.0\",")}]
 
 def show(c: Check) -> String:

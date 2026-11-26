@@ -17,8 +17,8 @@ import ./utf8.bend as U
 #
 # CLOVERLEAF_ADMIN_KEY, from the gitignored .env, is the key that adds dealer
 # organizations. The process keeps only its hash. Without one, nobody is the
-# admin. Each request gets 32 bytes from /dev/urandom, which a new
-# organization's API key is made from.
+# admin. A request to add an organization gets 32 bytes from /dev/urandom,
+# which its API key is made from. Other requests read none.
 
 def Job() -> Type:
   String & Chan(String)
@@ -84,14 +84,24 @@ def seed.opened(o: Result<&1, &1, U32 & String, File>, text: String, reply: Chan
     case Done{f}:
       IO.bind(Bytes(), Unit, File.read_bytes(f, 32), p => seeded(p, text, reply, log, torn, store, admin, next))
 
+def seed.wanted(want: Bool, +text: String, reply: Chan(String), log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
+  match want:
+    case True{}:
+      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open("/dev/urandom", "r"),
+        o => seed.opened(o, text, reply, log, torn, store, admin, next))
+    case False{}:
+      handled(Api.Api.handle(text, store, admin, []), log, torn, store, reply, next)
+
+def seed.chosen(+text: String, reply: Chan(String), log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
+  seed.wanted(Api.Api.needs_seed(text), text, reply, log, torn, store, admin, next)
+
 def took(got: Maybe<&1, Job()>, log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
   match got:
     case None{}:
       File.close(log)
     case Some{job}:
       (text, reply) = job
-      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open("/dev/urandom", "r"),
-        o => seed.opened(o, text, reply, log, torn, store, admin, next))
+      seed.chosen(text, reply, log, torn, store, admin, next)
 
 def keep(fuel: Nat, log: File, torn: Bool, store: St.Store, +admin: Maybe<&2, String>, +jobs: Chan(Job())) -> IO(Unit):
   match fuel:
@@ -373,7 +383,7 @@ def admin.warn(m: Maybe<&2, String>) -> IO(Unit):
     case Some{h}:
       IO.pure(Unit, Unit{})
     case None{}:
-      IO.print_err("cloverleaf web: CLOVERLEAF_ADMIN_KEY is unset or shorter than 32 characters, so no organization can be added")
+      IO.print_err("cloverleaf web: CLOVERLEAF_ADMIN_KEY is unset, or isn't at least 32 printable ASCII characters with no spaces, so no organization can be added")
 
 def admin.then(+admin: Maybe<&2, String>, dir: String) -> IO(Unit):
   do IO<Unit>:

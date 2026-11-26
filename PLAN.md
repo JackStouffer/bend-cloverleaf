@@ -364,7 +364,7 @@ Synthetic data generator, one nightly multi-day solve per state, contractor assi
 HTTP/1.1, JSON, the route table and schema-driven codecs, the OpenAPI generator, event log and snapshots, password and API-key auth, the external API, organizations and roles, and process wiring. Also adds the generated client and contract tests to the existing frontend project, so the contract is proven end to end before the UI is built.
 
 **Done when:** simulated dealer clients can create, read and cancel requests using the generated spec, real responses pass contract tests, a breaking API change fails `tsc`, data survives a crash, and tenant isolation is proven.
-**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. Dealers can create, read and cancel appraisals, with request bodies, path parameters and enums, on an append-only event log with snapshots. Contract tests check real responses through nginx against the spec, and the data survives the web process being killed. Dealer organizations have API keys, an admin key adds them, and tenant isolation is proven for every dealer request. Still to come: query parameters, password auth and sessions for people, roles, the external API, and serving `openapi.json`.
+**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. Dealers can create, read and cancel appraisals, with request bodies, path parameters and enums, on an append-only event log with snapshots. Contract tests check real responses through nginx against the spec, and the data survives the web process being killed. Dealer organizations have API keys, an admin key adds them, and tenant isolation is proven for every dealer request. Still to come: query parameters, password auth and sessions for people, roles, revoking and rotating organization keys, the external API, and serving `openapi.json`.
 
 ### 5. Geocoding (M)
 
@@ -539,10 +539,12 @@ Some injected bugs were caught because a proof script stopped matching the code,
 - `web/api.bend`: each route has an auth rule, `Open`, `Dealers` or `Admins`. The gate runs before the body is read. No key, or one nobody has, is a 401 with `WWW-Authenticate: Bearer`, and a key for the other kind of route is a 403. Lookups take the caller's organization, so another dealer's appraisal reads as 404, and idempotency keys are per organization. A key is `clv_` and 64 hex digits from 32 bytes of `/dev/urandom`.
 - `web/store.bend`: an `organized` change in the log, organizations in the store and the snapshot, ahead of the appraisals.
 - `web/openapi.bend`: `dealerKey` and `adminKey` Bearer schemes, each operation's `security`, and its 401 and 403.
-- `web/main.bend`: reads `CLOVERLEAF_ADMIN_KEY` at startup and keeps only its hash. A key under 32 characters sets no admin, and the process says so on stderr.
+- `web/main.bend`: reads `CLOVERLEAF_ADMIN_KEY` at startup and keeps only its hash. A key that isn't at least 32 printable ASCII characters with no spaces sets no admin, and the process says so on stderr. Only a request to add an organization reads `/dev/urandom`.
 - `scripts/contract.mjs`: adds two organizations each run and checks the gate and that neither sees the other's appraisals. `scripts/sha256.test.mjs` checks the hash against Node's.
 
-The log and snapshot formats changed, so a store from before this slice won't load. There was no deployed data.
+The log and snapshot formats changed. A store from before this slice loads as empty: its old lines don't decode and are skipped, its appraisals are dropped, and ids start again at `a1`. There was no deployed data, and the README says to clear the appraisals volume when upgrading.
+
+A lost answer to `POST /api/v1/organizations` leaves a key nobody holds. The change is logged before the 201 is sent, so a retry adds a second organization, and the first key still works. Only a key's hash is stored, so a retry can't send it again. The fix is revoking and rotating keys, which is still to come.
 
 **Proof effort**
 
@@ -552,7 +554,7 @@ The log and snapshot formats changed, so a store from before this slice won't lo
 | Web code | 4,252 lines, of which 3,865 are pure |
 | Proofs | 560 lines and 43 defs in the new `proof/auth.bend`, 25 lines changed in `proof/store.bend` |
 | Checking everything | about 4.5s |
-| Scenarios | 31 new, and every existing web scenario now sends a key |
+| Scenarios | 33 new, and every existing web scenario now sends a key |
 | `@unsafe` or foreign code | None new |
 | `--verdict` | Not run: Lean isn't installed in this environment |
 

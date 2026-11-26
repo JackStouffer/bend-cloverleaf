@@ -30,16 +30,34 @@ export function envValue(text, name) {
     const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
     if (!m || m[1] !== name) continue;
     const v = m[2];
-    const quoted = v.match(/^(["'])(.*)\1$/);
+    const quoted = v.match(/^(["'])(.*?)\1(?:\s+#.*)?$/);
     return quoted ? quoted[2] : v.replace(/\s+#.*$/, "");
   }
   return undefined;
 }
 
+// The shell's value wins, so the contract can run against another stack. When
+// it differs from .env, a local run would fail on its admin key, so say so,
+// without printing either key.
 function adminKey() {
   const fromEnv = process.env.CLOVERLEAF_ADMIN_KEY;
-  if (fromEnv) return fromEnv;
-  return existsSync(ENV) ? envValue(readFileSync(ENV, "utf8"), "CLOVERLEAF_ADMIN_KEY") : undefined;
+  const fromFile = existsSync(ENV) ? envValue(readFileSync(ENV, "utf8"), "CLOVERLEAF_ADMIN_KEY") : undefined;
+  if (fromEnv && fromFile !== undefined && fromEnv !== fromFile) {
+    console.error("note: CLOVERLEAF_ADMIN_KEY in the shell differs from .env; using the shell's");
+  }
+  return fromEnv || fromFile;
+}
+
+// The problem with a keep file, or undefined when it has the shape --keep writes.
+export function keptProblem(kept) {
+  const ok =
+    kept !== null &&
+    typeof kept === "object" &&
+    typeof kept.key === "string" &&
+    typeof kept.other === "string" &&
+    Array.isArray(kept.appraisals) &&
+    kept.appraisals.every((a) => a !== null && typeof a === "object" && typeof a.id === "string");
+  return ok ? undefined : "the keep file is from an older contract run: make it again with --keep";
 }
 
 // The problems with value under schema, as paths and messages. The spec uses a
@@ -257,6 +275,8 @@ export async function run(base, ca, keep, admin = adminKey()) {
 export async function recall(base, ca, file) {
   const spec = JSON.parse(readFileSync(SPEC, "utf8"));
   const kept = JSON.parse(readFileSync(file, "utf8"));
+  const shape = keptProblem(kept);
+  if (shape) return { calls: 0, problems: [shape] };
   const problems = [];
   let calls = 0;
   const get = async (path, key) => {
