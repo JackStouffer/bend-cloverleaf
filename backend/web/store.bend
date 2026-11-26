@@ -41,29 +41,56 @@ def Schemas.draft() -> S.Schema:
           S.SField{"state", Schemas.state(),
             S.SField{"due", S.SStr{}, S.SEnd{}}}}}})
 
+# organization is the dealer that requested it, the one whose key can read
+# and cancel it.
 def Schemas.appraisal() -> S.Schema:
   S.Schema.obj("Appraisal",
     S.SField{"id", S.SStr{},
-      S.SField{"key", S.SStr{},
-        S.SField{"address", S.SStr{},
-          S.SField{"zip", S.SStr{},
-            S.SField{"state", Schemas.state(),
-              S.SField{"due", S.SStr{},
-                S.SField{"status", Schemas.status(), S.SEnd{}}}}}}}})
+      S.SField{"organization", S.SStr{},
+        S.SField{"key", S.SStr{},
+          S.SField{"address", S.SStr{},
+            S.SField{"zip", S.SStr{},
+              S.SField{"state", Schemas.state(),
+                S.SField{"due", S.SStr{},
+                  S.SField{"status", Schemas.status(), S.SEnd{}}}}}}}}})
 
-# One line of the log. Exactly one of the two fields is there.
+# What an admin sends to add a dealer organization.
+def Schemas.org.draft() -> S.Schema:
+  S.Schema.obj("NewOrganization", S.SField{"name", S.SStr{}, S.SEnd{}})
+
+# The answer to adding one. apiKey is shown this once: the store keeps only its
+# hash.
+def Schemas.org.key() -> S.Schema:
+  S.Schema.obj("OrganizationKey",
+    S.SField{"id", S.SStr{},
+      S.SField{"name", S.SStr{},
+        S.SField{"apiKey", S.SStr{}, S.SEnd{}}}})
+
+# An organization as the log and the snapshot hold it, with its key's SHA-256
+# in hex. Never sent to a client.
+def Schemas.org.stored() -> S.Schema:
+  S.Schema.obj("StoredOrganization",
+    S.SField{"id", S.SStr{},
+      S.SField{"name", S.SStr{},
+        S.SField{"keyHash", S.SStr{}, S.SEnd{}}}})
+
+# One line of the log. Exactly one of the three fields is there.
 def Schemas.event() -> S.Schema:
   S.Schema.obj("Event",
     S.SOpt{"requested", Schemas.appraisal(),
-      S.SOpt{"cancelled", S.SStr{}, S.SEnd{}}})
+      S.SOpt{"cancelled", S.SStr{},
+        S.SOpt{"organized", Schemas.org.stored(), S.SEnd{}}}})
 
 # The first line of a snapshot: the store after the log's first `events`
-# lines holds `appraisals` records, and `count` were ever requested.
+# lines holds `organizations` organizations, then `appraisals` records. `count`
+# appraisals and `made` organizations were ever added, so ids aren't reused.
 def Schemas.snapshot() -> S.Schema:
   S.Schema.obj("SnapshotHead",
     S.SField{"events", S.SNat{},
       S.SField{"count", S.SNat{},
-        S.SField{"appraisals", S.SNat{}, S.SEnd{}}}})
+        S.SField{"appraisals", S.SNat{},
+          S.SField{"made", S.SNat{},
+            S.SField{"organizations", S.SNat{}, S.SEnd{}}}}}})
 
 def StateTag() -> Data:
   S.Tag(Enums.states())
@@ -109,64 +136,136 @@ def Status.is_cancelled(s: T.Status) -> Bool:
 # Records
 # -------
 
+# A request as the store takes it: the body a dealer sent, and org, the
+# organization whose key sent it. org never comes from the body.
 type Draft is Data:
-  Draft{key: String, address: String, zip: String, state: StateTag(), due: String}
+  Draft{org: String, key: String, address: String, zip: String, state: StateTag(), due: String}
 
 type Rec is Data:
-  Rec{id: String, key: String, address: String, zip: String, state: StateTag(), due: String, status: T.Status}
+  Rec{id: String, org: String, key: String, address: String, zip: String, state: StateTag(), due: String, status: T.Status}
 
 def Rec.id(r: Rec) -> String:
   match r:
-    case Rec{i, k, a, z, st, d, s}:
+    case Rec{i, o, k, a, z, st, d, s}:
       i
+
+def Rec.org(r: Rec) -> String:
+  match r:
+    case Rec{i, o, k, a, z, st, d, s}:
+      o
 
 def Rec.key(r: Rec) -> String:
   match r:
-    case Rec{i, k, a, z, st, d, s}:
+    case Rec{i, o, k, a, z, st, d, s}:
       k
+
+def Draft.org(d: Draft) -> String:
+  match d:
+    case Draft{o, k, a, z, st, due}:
+      o
 
 def Draft.key(d: Draft) -> String:
   match d:
-    case Draft{k, a, z, st, due}:
+    case Draft{o, k, a, z, st, due}:
       k
 
 def Rec.status(r: Rec) -> T.Status:
   match r:
-    case Rec{i, k, a, z, st, d, s}:
+    case Rec{i, o, k, a, z, st, d, s}:
       s
 
 def Rec.new(id: String, d: Draft) -> Rec:
   match d:
-    case Draft{k, a, z, st, due}:
-      Rec{id, k, a, z, st, due, T.Open{}}
+    case Draft{o, k, a, z, st, due}:
+      Rec{id, o, k, a, z, st, due, T.Open{}}
 
 def Rec.with(r: Rec, s: T.Status) -> Rec:
   match r:
-    case Rec{i, k, a, z, st, d, old}:
-      Rec{i, k, a, z, st, d, s}
+    case Rec{i, o, k, a, z, st, d, old}:
+      Rec{i, o, k, a, z, st, d, s}
 
-def Draft.of(v: S.Value(Schemas.draft())) -> Draft:
+def Draft.of(org: String, v: S.Value(Schemas.draft())) -> Draft:
   (k, r1) = v
   (a, r2) = r1
   (z, r3) = r2
   (st, r4) = r3
   (d, u) = r4
-  Draft{k, a, z, st, d}
+  Draft{org, k, a, z, st, d}
 
 def Rec.value(r: Rec) -> S.Value(Schemas.appraisal()):
   match r:
-    case Rec{i, k, a, z, st, d, s}:
-      (i, (k, (a, (z, (st, (d, (Status.tag(s), Unit{})))))))
+    case Rec{i, o, k, a, z, st, d, s}:
+      (i, (o, (k, (a, (z, (st, (d, (Status.tag(s), Unit{}))))))))
 
 def Rec.of(v: S.Value(Schemas.appraisal())) -> Rec:
-  (i, r1) = v
+  (i, r0) = v
+  (o, r1) = r0
   (k, r2) = r1
   (a, r3) = r2
   (z, r4) = r3
   (st, r5) = r4
   (d, r6) = r5
   (s, u) = r6
-  Rec{i, k, a, z, st, d, Status.of(s)}
+  Rec{i, o, k, a, z, st, d, Status.of(s)}
+
+# Organizations
+# -------------
+
+# A dealer organization. hash is the SHA-256 of its API key, in hex.
+type Org is Data:
+  Org{id: String, name: String, hash: String}
+
+def Org.id(g: Org) -> String:
+  match g:
+    case Org{i, n, h}:
+      i
+
+def Org.hash(g: Org) -> String:
+  match g:
+    case Org{i, n, h}:
+      h
+
+def Org.value(g: Org) -> S.Value(Schemas.org.stored()):
+  match g:
+    case Org{i, n, h}:
+      (i, (n, (h, Unit{})))
+
+def Org.of(v: S.Value(Schemas.org.stored())) -> Org:
+  (i, r1) = v
+  (n, r2) = r1
+  (h, u) = r2
+  Org{i, n, h}
+
+def Orgs.pick(hit: Bool, g: Org, rest: Maybe<&2, Org>) -> Maybe<&2, Org>:
+  match hit:
+    case True{}:
+      Some{g}
+    case False{}:
+      rest
+
+# The organization whose key has this hash.
+def Orgs.by_hash(+h: String, gs: List<&2, Org>) -> Maybe<&2, Org>:
+  match gs:
+    case Nil{}:
+      None{}
+    case Con{+g, rest}:
+      Orgs.pick(J.Text.same(h, Org.hash(g)), g, Orgs.by_hash(h, rest))
+
+# The organization with this id.
+def Orgs.find(+i: String, gs: List<&2, Org>) -> Maybe<&2, Org>:
+  match gs:
+    case Nil{}:
+      None{}
+    case Con{+g, rest}:
+      Orgs.pick(J.Text.same(i, Org.id(g)), g, Orgs.find(i, rest))
+
+# Whether some organization has this id and this key hash.
+def Orgs.holds(+i: String, +h: String, gs: List<&2, Org>) -> Bool:
+  match gs:
+    case Nil{}:
+      False{}
+    case Con{+g, rest}:
+      (J.Text.same(i, Org.id(g)) && J.Text.same(h, Org.hash(g))) || Orgs.holds(i, h, rest)
 
 # Checking a draft
 # ----------------
@@ -224,39 +323,61 @@ def Draft.first(ok: Bool, code: String, detail: String, rest: Maybe<&2, Problem>
 # The first rule the draft breaks, or None.
 def Draft.problem(d: Draft) -> Maybe<&2, Problem>:
   match d:
-    case Draft{k, a, z, st, due}:
+    case Draft{o, k, a, z, st, due}:
       Draft.first(Text.sized(k, 1n, 64n), "invalid_key", "key must be 1 to 64 characters",
         Draft.first(Text.sized(a, 1n, 200n), "invalid_address", "address must be 1 to 200 characters",
           Draft.first(Text.digits(5n, z), "invalid_zip", "zip must be 5 digits",
             Draft.first(Date.ok(due), "invalid_due", "due must be a date, YYYY-MM-DD", None{}))))
 
+# The first rule an organization's name breaks, or None.
+def Org.problem(+name: String) -> Maybe<&2, Problem>:
+  Draft.first(Text.sized(name, 1n, 100n), "invalid_name", "name must be 1 to 100 characters", None{})
+
 # Events and the store
 # --------------------
 
+# Appraisal ids are unique across organizations, so a cancel names only the
+# id. The handler only cancels a record the caller's organization owns.
 type Change is Data:
   Requested{rec: Rec}
   Cancelled{id: String}
+  Organized{org: Org}
 
-# Records newest first. count is how many were ever requested, so the next id
-# is a+(count+1) and ids are never reused.
+# Records and organizations newest first. count is how many appraisals were
+# ever requested, so the next id is a+(count+1), and made is how many
+# organizations were ever added, so the next is o+(made+1). Ids are never
+# reused.
 type Store is Data:
-  Store{count: Nat, recs: List<&2, Rec>}
+  Store{count: Nat, recs: List<&2, Rec>, made: Nat, orgs: List<&2, Org>}
 
 def Store.empty() -> Store:
-  Store{0n, []}
+  Store{0n, [], 0n, []}
 
 def Store.count(s: Store) -> Nat:
   match s:
-    case Store{n, rs}:
+    case Store{n, rs, m, gs}:
       n
 
 def Store.recs(s: Store) -> List<&2, Rec>:
   match s:
-    case Store{n, rs}:
+    case Store{n, rs, m, gs}:
       rs
+
+def Store.made(s: Store) -> Nat:
+  match s:
+    case Store{n, rs, m, gs}:
+      m
+
+def Store.orgs(s: Store) -> List<&2, Org>:
+  match s:
+    case Store{n, rs, m, gs}:
+      gs
 
 def Store.next(s: Store) -> String:
   "a" ++ Nat.show(Nat.add(Store.count(s), 1n))
+
+def Store.next.org(s: Store) -> String:
+  "o" ++ Nat.show(Nat.add(Store.made(s), 1n))
 
 def Store.find.pick(hit: Bool, r: Rec, rest: Maybe<&2, Rec>) -> Maybe<&2, Rec>:
   match hit:
@@ -273,13 +394,23 @@ def Store.find(+id: String, rs: List<&2, Rec>) -> Maybe<&2, Rec>:
     case Con{+r, rest}:
       Store.find.pick(J.Text.same(id, Rec.id(r)), r, Store.find(id, rest))
 
-# The record with this key.
-def Store.by_key(+key: String, rs: List<&2, Rec>) -> Maybe<&2, Rec>:
+# The record with this id, if the organization org owns it. A dealer reads and
+# cancels through this, so another dealer's record reads as missing.
+def Store.owned(+org: String, +id: String, rs: List<&2, Rec>) -> Maybe<&2, Rec>:
   match rs:
     case Nil{}:
       None{}
     case Con{+r, rest}:
-      Store.find.pick(J.Text.same(key, Rec.key(r)), r, Store.by_key(key, rest))
+      Store.find.pick(J.Text.same(id, Rec.id(r)) && J.Text.same(org, Rec.org(r)), r, Store.owned(org, id, rest))
+
+# The organization org's record with this key. Keys are each dealer's own, so
+# two dealers can use the same one.
+def Store.by_key(+org: String, +key: String, rs: List<&2, Rec>) -> Maybe<&2, Rec>:
+  match rs:
+    case Nil{}:
+      None{}
+    case Con{+r, rest}:
+      Store.find.pick(J.Text.same(key, Rec.key(r)) && J.Text.same(org, Rec.org(r)), r, Store.by_key(org, key, rest))
 
 def Rec.cancel(+r: Rec) -> Rec:
   Rec.with(r, Life.advance(Rec.status(r), Life.Cancel{}))
@@ -301,13 +432,25 @@ def Recs.cancel(+id: String, rs: List<&2, Rec>) -> List<&2, Rec>:
 
 def Store.cancel(+i: String, s: Store) -> Store:
   match s:
-    case Store{n, rs}:
-      Store{n, Recs.cancel(i, rs)}
+    case Store{n, rs, m, gs}:
+      Store{n, Recs.cancel(i, rs), m, gs}
 
 def Store.put(r: Rec, s: Store) -> Store:
   match s:
-    case Store{n, rs}:
-      Store{Nat.add(n, 1n), r <> rs}
+    case Store{n, rs, m, gs}:
+      Store{Nat.add(n, 1n), r <> rs, m, gs}
+
+def Store.enroll(g: Org, s: Store) -> Store:
+  match s:
+    case Store{n, rs, m, gs}:
+      Store{n, rs, Nat.add(m, 1n), g <> gs}
+
+def Store.organize(found: Maybe<&2, Org>, g: Org, s: Store) -> Store:
+  match found:
+    case None{}:
+      Store.enroll(g, s)
+    case Some{x}:
+      s
 
 def Store.add(found: Maybe<&2, Rec>, r: Rec, s: Store) -> Store:
   match found:
@@ -324,6 +467,8 @@ def Store.apply(+s: Store, e: Change) -> Store:
       Store.add(Store.find(Rec.id(r), Store.recs(s)), r, s)
     case Cancelled{i}:
       Store.cancel(i, s)
+    case Organized{+g}:
+      Store.organize(Orgs.find(Org.id(g), Store.orgs(s)), g, s)
 
 # The store after the changes es, in order, starting from s.
 def Store.replay(es: List<&2, Change>, s: Store) -> Store:
@@ -339,23 +484,28 @@ def Store.replay(es: List<&2, Change>, s: Store) -> Store:
 def Change.value(e: Change) -> S.Value(Schemas.event()):
   match e:
     case Requested{r}:
-      (Some{Rec.value(r)}, (None{}, Unit{}))
+      (Some{Rec.value(r)}, (None{}, (None{}, Unit{})))
     case Cancelled{i}:
-      (None{}, (Some{i}, Unit{}))
+      (None{}, (Some{i}, (None{}, Unit{})))
+    case Organized{g}:
+      (None{}, (None{}, (Some{Org.value(g)}, Unit{})))
 
-def Change.pick(req: Maybe<&2, S.Value(Schemas.appraisal())>, can: Maybe<&2, String>) -> Maybe<&2, Change>:
-  match req can:
-    case Some{r} None{}:
+def Change.pick(req: Maybe<&2, S.Value(Schemas.appraisal())>, can: Maybe<&2, String>, org: Maybe<&2, S.Value(Schemas.org.stored())>) -> Maybe<&2, Change>:
+  match req can org:
+    case Some{r} None{} None{}:
       Some{Requested{Rec.of(r)}}
-    case None{} Some{i}:
+    case None{} Some{i} None{}:
       Some{Cancelled{i}}
-    case _ _:
+    case None{} None{} Some{g}:
+      Some{Organized{Org.of(g)}}
+    case _ _ _:
       None{}
 
 def Change.of(v: S.Value(Schemas.event())) -> Maybe<&2, Change>:
   (req, r1) = v
-  (can, u) = r1
-  Change.pick(req, can)
+  (can, r2) = r1
+  (org, u) = r2
+  Change.pick(req, can, org)
 
 def Change.write(e: Change) -> J.Json:
   S.encode(Schemas.event(), Change.value(e))
@@ -385,30 +535,59 @@ def Change.parse(line: String) -> Maybe<&2, Change>:
 # Snapshots
 # ---------
 
-# A snapshot is a head line, then one record per line, newest first, so the
-# shell writes and reads it a line at a time and never holds it whole. One cut
-# off by a crash has fewer records than its head says, and doesn't load.
+# A snapshot is a head line, then one organization per line, then one record
+# per line, each newest first, so the shell writes and reads it a line at a
+# time and never holds it whole. One cut off by a crash has fewer lines than
+# its head says, and doesn't load.
 
 type Snap is Data:
   Snap{events: Nat, store: Store}
 
 type Head is Data:
-  Head{events: Nat, count: Nat, size: Nat}
+  Head{events: Nat, count: Nat, size: Nat, made: Nat, orgs: Nat}
 
-def Head.value(n: Nat, c: Nat, k: Nat) -> S.Value(Schemas.snapshot()):
-  (n, (c, (k, Unit{})))
+def Head.value(n: Nat, c: Nat, k: Nat, m: Nat, o: Nat) -> S.Value(Schemas.snapshot()):
+  (n, (c, (k, (m, (o, Unit{})))))
 
 def Head.of(v: S.Value(Schemas.snapshot())) -> Head:
   (n, r1) = v
   (c, r2) = r1
-  (k, u) = r2
-  Head{n, c, k}
+  (k, r3) = r2
+  (m, r4) = r3
+  (o, u) = r4
+  Head{n, c, k, m, o}
+
+def Head.orgs(h: Head) -> Nat:
+  match h:
+    case Head{n, c, k, m, o}:
+      o
 
 def Snapshot.head(n: Nat, +s: Store) -> String:
-  J.Json.print(S.encode(Schemas.snapshot(), Head.value(n, Store.count(s), List.length(&2, Rec, Store.recs(s))))) ++ "\n"
+  J.Json.print(S.encode(Schemas.snapshot(), Head.value(n, Store.count(s), List.length(&2, Rec, Store.recs(s)),
+    Store.made(s), List.length(&2, Org, Store.orgs(s))))) ++ "\n"
 
 def Rec.line(r: Rec) -> String:
   J.Json.print(S.encode(Schemas.appraisal(), Rec.value(r))) ++ "\n"
+
+def Org.line(g: Org) -> String:
+  J.Json.print(S.encode(Schemas.org.stored(), Org.value(g))) ++ "\n"
+
+def Org.found(m: Maybe<&2, S.Value(Schemas.org.stored())>) -> Maybe<&2, Org>:
+  match m:
+    case None{}:
+      None{}
+    case Some{v}:
+      Some{Org.of(v)}
+
+def Org.json(m: Maybe<&2, J.Json>) -> Maybe<&2, Org>:
+  match m:
+    case None{}:
+      None{}
+    case Some{j}:
+      Org.found(S.decode(Schemas.org.stored(), j))
+
+def Org.parse(line: String) -> Maybe<&2, Org>:
+  Org.json(J.Json.parse(line))
 
 def Head.found(m: Maybe<&2, S.Value(Schemas.snapshot())>) -> Maybe<&2, Head>:
   match m:
@@ -447,71 +626,87 @@ def Rec.parse(line: String) -> Maybe<&2, Rec>:
 # Load state while the shell reads a snapshot in chunks of bytes. head is None
 # until the head line is read. ok turns False at a line that isn't what the
 # snapshot needs there, or that's longer than any record, and then the rest is
-# ignored. got counts the records read, recs holds them oldest first, and line
-# holds the bytes of the line being read, reversed, with width counting them.
+# ignored. got counts the lines read after the head: the first ones are
+# organizations, as many as the head says, and the rest are records. orgs and
+# recs hold them oldest first, and line holds the bytes of the line being
+# read, reversed, with width counting them.
 type Load is Data:
-  Load{head: Maybe<&2, Head>, ok: Bool, got: Nat, recs: List<&2, Rec>, line: List<&2, U32>, width: Nat}
+  Load{head: Maybe<&2, Head>, ok: Bool, got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>, line: List<&2, U32>, width: Nat}
 
 def Load.start() -> Load:
-  Load{None{}, True{}, 0n, [], [], 0n}
+  Load{None{}, True{}, 0n, [], [], [], 0n}
 
 def Load.broken() -> Load:
-  Load{None{}, False{}, 0n, [], [], 0n}
+  Load{None{}, False{}, 0n, [], [], [], 0n}
 
-def Load.rec(m: Maybe<&2, Rec>, h: Head, got: Nat, recs: List<&2, Rec>) -> Load:
+def Load.rec(m: Maybe<&2, Rec>, h: Head, got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>) -> Load:
   match m:
     case Some{r}:
-      Load{Some{h}, True{}, Nat.add(got, 1n), r <> recs, [], 0n}
+      Load{Some{h}, True{}, Nat.add(got, 1n), orgs, r <> recs, [], 0n}
     case None{}:
       Load.broken()
+
+def Load.org(m: Maybe<&2, Org>, h: Head, got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>) -> Load:
+  match m:
+    case Some{g}:
+      Load{Some{h}, True{}, Nat.add(got, 1n), g <> orgs, recs, [], 0n}
+    case None{}:
+      Load.broken()
+
+def Load.kind(org: Bool, h: Head, got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>, text: String) -> Load:
+  match org:
+    case True{}:
+      Load.org(Org.parse(text), h, got, orgs, recs)
+    case False{}:
+      Load.rec(Rec.parse(text), h, got, orgs, recs)
 
 def Load.head(m: Maybe<&2, Head>) -> Load:
   match m:
     case Some{h}:
-      Load{Some{h}, True{}, 0n, [], [], 0n}
+      Load{Some{h}, True{}, 0n, [], [], [], 0n}
     case None{}:
       Load.broken()
 
-def Load.text(head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>, text: String) -> Load:
+def Load.text(head: Maybe<&2, Head>, +got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>, text: String) -> Load:
   match head:
     case None{}:
       Load.head(Head.parse(text))
-    case Some{h}:
-      Load.rec(Rec.parse(text), h, got, recs)
+    case Some{+h}:
+      Load.kind(Nat.is_lt(got, Head.orgs(h)), h, got, orgs, recs, text)
 
 # The line just read ends.
-def Load.end(ok: Bool, head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>, line: List<&2, U32>) -> Load:
+def Load.end(ok: Bool, head: Maybe<&2, Head>, got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>, line: List<&2, U32>) -> Load:
   match ok:
     case True{}:
-      Load.text(head, got, recs, U.Utf8.decode(List.reverse(&2, U32, line)))
+      Load.text(head, got, orgs, recs, U.Utf8.decode(List.reverse(&2, U32, line)))
     case False{}:
       Load.broken()
 
-def Load.grow(fits: Bool, b: U32, head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>, line: List<&2, U32>, width: Nat) -> Load:
+def Load.grow(fits: Bool, b: U32, head: Maybe<&2, Head>, got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>, line: List<&2, U32>, width: Nat) -> Load:
   match fits:
     case True{}:
-      Load{head, True{}, got, recs, b <> line, Nat.add(width, 1n)}
+      Load{head, True{}, got, orgs, recs, b <> line, Nat.add(width, 1n)}
     case False{}:
       Load.broken()
 
-def Load.add(ok: Bool, b: U32, head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>, line: List<&2, U32>, +width: Nat) -> Load:
+def Load.add(ok: Bool, b: U32, head: Maybe<&2, Head>, got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>, line: List<&2, U32>, +width: Nat) -> Load:
   match ok:
     case True{}:
-      Load.grow(Nat.is_lt(width, 65536n), b, head, got, recs, line, width)
+      Load.grow(Nat.is_lt(width, 65536n), b, head, got, orgs, recs, line, width)
     case False{}:
       Load.broken()
 
-def Load.step(newline: Bool, b: U32, head: Maybe<&2, Head>, ok: Bool, got: Nat, recs: List<&2, Rec>, line: List<&2, U32>, width: Nat) -> Load:
+def Load.step(newline: Bool, b: U32, head: Maybe<&2, Head>, ok: Bool, got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>, line: List<&2, U32>, width: Nat) -> Load:
   match newline:
     case True{}:
-      Load.end(ok, head, got, recs, line)
+      Load.end(ok, head, got, orgs, recs, line)
     case False{}:
-      Load.add(ok, b, head, got, recs, line, width)
+      Load.add(ok, b, head, got, orgs, recs, line, width)
 
 def Load.push(newline: Bool, b: U32, l: Load) -> Load:
   match l:
-    case Load{head, ok, got, recs, line, width}:
-      Load.step(newline, b, head, ok, got, recs, line, width)
+    case Load{head, ok, got, orgs, recs, line, width}:
+      Load.step(newline, b, head, ok, got, orgs, recs, line, width)
 
 def Load.feed.go(fuel: Nat, bs: List<&2, U32>, l: Load) -> Load:
   match fuel bs:
@@ -525,24 +720,24 @@ def Load.feed.go(fuel: Nat, bs: List<&2, U32>, l: Load) -> Load:
 def Load.feed(+bs: List<&2, U32>, l: Load) -> Load:
   Load.feed.go(List.length(&2, U32, bs), bs, l)
 
-def Load.check(fits: Bool, n: Nat, c: Nat, recs: List<&2, Rec>) -> Maybe<&2, Snap>:
+def Load.check(fits: Bool, n: Nat, c: Nat, m: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>) -> Maybe<&2, Snap>:
   match fits:
     case True{}:
-      Some{Snap{n, Store{c, List.reverse(&2, Rec, recs)}}}
+      Some{Snap{n, Store{c, List.reverse(&2, Rec, recs), m, List.reverse(&2, Org, orgs)}}}
     case False{}:
       None{}
 
-def Load.snap(head: Maybe<&2, Head>, +got: Nat, recs: List<&2, Rec>) -> Maybe<&2, Snap>:
+def Load.snap(head: Maybe<&2, Head>, +got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>) -> Maybe<&2, Snap>:
   match head:
     case None{}:
       None{}
-    case Some{Head{n, +c, +k}}:
-      Load.check(Nat.is_eq(k, got) && Nat.is_le(k, c), n, c, recs)
+    case Some{Head{n, +c, +k, +m, +o}}:
+      Load.check(Nat.is_eq(Nat.add(k, o), got) && Nat.is_le(k, c) && Nat.is_le(o, m), n, c, m, orgs, recs)
 
-def Load.done(whole: Bool, head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>) -> Maybe<&2, Snap>:
+def Load.done(whole: Bool, head: Maybe<&2, Head>, got: Nat, orgs: List<&2, Org>, recs: List<&2, Rec>) -> Maybe<&2, Snap>:
   match whole:
     case True{}:
-      Load.snap(head, got, recs)
+      Load.snap(head, got, orgs, recs)
     case False{}:
       None{}
 
@@ -550,8 +745,8 @@ def Load.done(whole: Bool, head: Maybe<&2, Head>, got: Nat, recs: List<&2, Rec>)
 # like one a crash cut off while it was written.
 def Load.finish(l: Load) -> Maybe<&2, Snap>:
   match l:
-    case Load{head, ok, got, recs, line, width}:
-      Load.done(ok && List.is_empty(&2, U32, line), head, got, recs)
+    case Load{head, ok, got, orgs, recs, line, width}:
+      Load.done(ok && List.is_empty(&2, U32, line), head, got, orgs, recs)
 
 # Replaying the log
 # -----------------

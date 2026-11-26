@@ -42,7 +42,7 @@ node scripts/nightly.mjs matrices data/synth data/road backend/build/road  # eve
 node scripts/nightly.mjs solve data/synth backend/build/solver 12 planner  # the national solve; planner, first_fit or nearest
 docker compose --profile solver run --rm solver national /jobs/synth planner 36000 4 <state>...  # the same solve in Compose, inputs in data/jobs
 docker compose cp nginx:/etc/nginx/certs/tls.crt data/tls.crt  # the stack's certificate, for the contract tests
-node scripts/contract.mjs https://localhost:8443 data/tls.crt  # contract tests: real responses through nginx against openapi.json
+node scripts/contract.mjs https://localhost:8443 data/tls.crt  # contract tests: real responses through nginx against openapi.json, with the admin key from .env
 node scripts/contract.mjs https://localhost:8443 data/tls.crt --keep data/kept.json  # crash test: keep, then
 docker compose exec web bash -c 'kill -9 -1'             # kill the web process, wait for it to be healthy again, then
 node scripts/contract.mjs https://localhost:8443 data/tls.crt --recall data/kept.json  # check it all reads back

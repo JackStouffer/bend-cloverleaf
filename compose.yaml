@@ -14,6 +14,12 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     memswap_limit: 512m
+    # CLOVERLEAF_ADMIN_KEY, the key that adds dealer organizations, comes from
+    # the gitignored .env. Without it the web process starts, and nobody is the
+    # admin.
+    env_file:
+      - path: .env
+        required: false
     volumes:
       - appraisals:/data
     expose:
