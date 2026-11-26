@@ -150,7 +150,7 @@ compose.yaml, compose.dev.yaml
 
 `bend PROOF.bend` runs from `backend/`, and npm scripts run from `frontend/`. `openapi.json` lives in `backend/`, because the backend owns it.
 
-The web process is split the same way as the others. `web/json.bend`, `web/schema.bend`, `web/api.bend` and `web/openapi.bend` are pure, and `web/main.bend` and `web/spec.bend` are the IO shells. `npm run gen:api` runs `bend web/spec.bend` and then `openapi-typescript`, writing `backend/openapi.json` and `frontend/src/api/schema.ts`. `npm run check` and the backend image both fail if either is out of date.
+The web process is split the same way as the others. `web/json.bend`, `web/schema.bend`, `web/api.bend`, `web/store.bend`, `web/utf8.bend` and `web/openapi.bend` are pure, and `web/main.bend` and `web/spec.bend` are the IO shells. `npm run gen:api` runs `bend web/spec.bend` and then `openapi-typescript`, writing `backend/openapi.json` and `frontend/src/api/schema.ts`. `npm run check` and the backend image both fail if either is out of date.
 
 ### Local deployment
 
@@ -159,7 +159,7 @@ Compose runs the app the way a real deployment would, so nothing talks to the ba
 | Service | Role |
 |---|---|
 | `nginx` | TLS on port 8443, redirect from 8080, static frontend, proxy to the backend |
-| `web` | Bend web process, built in a multi-stage image with Bend pinned by checksum |
+| `web` | Bend web process, built in a multi-stage image with Bend pinned by checksum. Its event log and snapshot live in the `appraisals` volume at `/data` |
 | `road` | Batch lookups, run one state at a time under a Compose profile, each run its own process, because Bend's heap never shrinks. Its image carries the road data, and jobs read and write files in `./data/jobs` |
 | `solver` | The nightly national solve, one run per night under a Compose profile, reading each state's instance and road matrix from `./data/jobs` and writing each plan beside them |
 | `road-build` | One-shot Node job that refreshes the cached road data in `./data/road`. Has its own image, so the Bend images stay free of Node. Runs under a Compose profile, not on `up` |
@@ -167,7 +167,7 @@ Compose runs the app the way a real deployment would, so nothing talks to the ba
 
 - **Real-world run:** `docker compose up --build` serves the built frontend, and is what Playwright, contract and load tests target.
 - **Development:** `docker compose -f compose.yaml -f compose.dev.yaml watch` keeps the same nginx and TLS path, swaps in Vite, and rebuilds the backend on change.
-- **Images:** `backend/Dockerfile` builds from the repo root into three images, `web`, `road` and `solver`, and fails if `bend PROOF.bend`, the Bend checks or the scenarios fail. All three have built and run on Docker Desktop, and the national solve ran in the `solver` image under its 2GB cap. The full stack hasn't run under `docker compose up` yet.
+- **Images:** `backend/Dockerfile` builds from the repo root into three images, `web`, `road` and `solver`, and fails if `bend PROOF.bend`, the Bend checks or the scenarios fail. All three have built and run on Docker Desktop, and the national solve ran in the `solver` image under its 2GB cap. `web` and `nginx` have run together under Compose in a Linux sandbox, where the contract and crash tests passed through nginx. The `road` image wasn't built there, because it needs the 30GB data rebuild.
 - **Certificates:** nginx creates a self-signed certificate in a Docker volume on first start. No key is ever committed.
 - **Secrets:** later secrets come from a gitignored `.env` file, never from the images or Compose files.
 - **Backend protection:** nginx buffers requests and limits body size, so slow or oversized clients never reach Bend's event loop. Server-Sent Events will need a route with buffering turned off.
@@ -196,7 +196,7 @@ An API change is a Bend change. If the frontend's use of the API no longer match
 
 `openapi.json` and the generated types are committed, and the check regenerates them and fails on any difference. A change to the API therefore always shows up in review.
 
-The spike covered one POST route with strings, numbers, lists and objects. Still to build: path and query parameters, error responses, optional fields, enums, auth schemes, and named components, which the generated TypeScript needs for readable type names.
+Built so far: request bodies, path parameters, error responses, optional fields, enums and named components. Still to build: query parameters and auth schemes.
 
 Live updates use Server-Sent Events, which `openapi-fetch` doesn't handle. Event payloads are still schemas in the route table, and a small typed wrapper around `EventSource` consumes them.
 
@@ -290,6 +290,15 @@ Proven so far in `LAWS.bend`, for the pure core:
 - Every route schema is well formed, so a value never sits where only items or a row belong, and an object missing a required field is refused.
 - Every error body the dispatcher sends decodes under the published `Error` schema.
 - Each component name in the spec has one definition.
+- Replaying a list of changes in two parts gives the store the whole list gives, so a store built from the first n changes carries on with the rest as if it had seen them all.
+- Every change the log writes reads back as the same change.
+- A request with a new id is stored and found by its id, and replaying a request whose id is already stored changes nothing.
+- A request with a key that's already stored writes nothing and answers 200 with the stored appraisal.
+- A request that breaks a rule writes nothing and answers 422. One that breaks none is logged as an open appraisal and answers 201.
+- Reading never writes, and an unknown id answers 404 to a read or a cancel.
+- An open appraisal's cancel is logged. One that's underway or completed writes nothing and answers 409, and cancelling twice writes nothing and answers 200.
+- No route answers with a number, so no handler can send one out of range.
+- Every request that can write to the log is on a route that publishes the 500 the shell sends when the write fails.
 
 Road times use the same idea as `publish`. The search isn't proven to find anything, so a lookup walks the path it left behind against the graph and reports only what that walk confirms. A search bug shows up as a refused lookup, which the shell won't report, never as a wrong time. `Array` is a tree in Base, so laws can reason about reads directly. An array can't be copied in a proof, so `proof/road.bend` proves the Base clone gives two provably equal live copies and builds on that.
 
@@ -297,7 +306,6 @@ Healing is proven by construction: every edit rebuilds the route through `Route.
 
 Still to prove:
 
-- Replaying a snapshot plus later events equals replaying the full log.
 - Tenant isolation and role permissions hold for every request.
 
 Not proven:
@@ -310,8 +318,11 @@ Not proven:
 - That the planner handles the tightest deadline first. Also covered by the scenarios.
 - That road times match reality. No law looks inside the travel time function, so swapping in real road times changes no proof.
 - That the emitted `openapi.json` means the same thing as the Bend schema. Contract tests check real responses against the spec instead.
+- That a snapshot holds the store it was written from. The shell writes and reads it as lines of text, and skips the log lines it covers by counting lines, bad ones included, and neither has a law. The scenarios cover a snapshot reading back, one cut short, and one missing its last record.
 - The JSON text parser and printer. The laws reason about the JSON tree, and `scripts/json.test.mjs` checks the text side against JavaScript's `JSON`, with seeded random values.
-- Request-line parsing and dispatch. `test/scenario.bend` covers 200, 404, 405 and 400.
+- Request-line parsing and dispatch. `test/scenario.bend` covers 200, 201, 404, 405, 409, 422 and 400.
+- Reading the log a chunk of bytes at a time, decoding UTF-8, and telling when a request has all its bytes. The scenarios cover torn lines, bad lines, bad bytes and bodies with multibyte characters.
+- That the store survives a crash. The log is written before the response is sent, and `scripts/contract.mjs` checks the data reads back after the web process is killed. Base has no fsync, so a power cut can still lose writes the OS hadn't flushed.
 - The IO shell, process wiring and frontend. These rely on testing.
 - `.pbf` decoding. The Node road build sits outside the proofs and `--verdict`, so it relies on its tests and the reference router. Laws about road data can only assume what its records say.
 - That a state's graph gives the true drive time. The 40km margin was measured on Georgia only.
@@ -348,7 +359,7 @@ Synthetic data generator, one nightly multi-day solve per state, contractor assi
 HTTP/1.1, JSON, the route table and schema-driven codecs, the OpenAPI generator, event log and snapshots, password and API-key auth, the external API, organizations and roles, and process wiring. Also adds the generated client and contract tests to the existing frontend project, so the contract is proven end to end before the UI is built.
 
 **Done when:** simulated dealer clients can create, read and cancel requests using the generated spec, real responses pass contract tests, a breaking API change fails `tsc`, data survives a crash, and tenant isolation is proven.
-**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. `GET /api/health` is the only route so far. A breaking change to it fails `tsc`. Still to come: request bodies, path and query parameters, enums, auth schemes, the event log and snapshots, auth, organizations and roles, the external API, serving `openapi.json`, and contract tests against real responses through nginx.
+**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. Dealers can create, read and cancel appraisals, with request bodies, path parameters and enums, on an append-only event log with snapshots. Contract tests check real responses through nginx against the spec, and the data survives the web process being killed. Still to come: query parameters, auth schemes, auth, organizations and roles, tenant isolation, the external API, and serving `openapi.json`.
 
 ### 5. Geocoding (M)
 
@@ -513,6 +524,47 @@ Some injected bugs were caught because a proof script stopped matching the code,
 **Friction**
 
 - **Parallel reads:** an array has one owner, so lanes can't share a read-only graph without `@unsafe`. Copying it is the largest memory cost in the road search.
+
+### Milestone 4 appraisal requests
+
+**What was built**
+
+- `POST /api/v1/appraisals`, `GET /api/v1/appraisals/{id}` and `POST /api/v1/appraisals/{id}/cancel`, with a `NewAppraisal` body, an `id` path parameter, and `UsState` and `AppraisalStatus` enums. A dealer's `key` makes a request safe to retry. Ids are `a1`, `a2` and on, and are never reused.
+- `web/schema.bend`: `SEnum`, whose value is a tag picked from its list of names, so a handler can't send a state or status the spec doesn't list. `Schema.free` says a schema holds no number.
+- `web/store.bend`: drafts and their rules (key and address lengths, a 5-digit zip, a `YYYY-MM-DD` due date), the store, the `requested` and `cancelled` changes the log holds, snapshots, and a replay that takes the log's bytes a chunk at a time.
+- `web/api.bend`: an `Op` carries what a handler needs from the store, already looked up, so handlers stay pure and the laws cover every store. `Api.change` says what the log must record for a request. Paths match templates with parameters, and `Http.ready` tells from raw bytes when a request is whole.
+- `web/utf8.bend`: a UTF-8 decoder. Base has none, and a String read can cut a character in two at the end of a chunk, so the shell reads bytes.
+- `web/main.bend`: one computation owns the store and the log. Connections pass it their request over a channel and wait, so changes apply one at a time in log order. A change is appended to `events.log` before its response is sent. At startup the shell loads `snapshot.jsonl`, replays the log lines after it, ends a torn last line, and writes a new snapshot. Both files are read and written a line at a time, so neither is held whole. After a failed write, the next change starts on a new line.
+- `scripts/contract.mjs`: a dealer client that sends 17 requests through nginx and checks every response against `openapi.json`, with `--keep` and `--recall` for the crash test.
+
+**Proof effort**
+
+| Measure | Result |
+|---|---|
+| Laws | 24 new, in 172 lines |
+| Web code | 3,542 lines, of which 3,206 are pure |
+| Proofs | 217 lines and 14 lemmas in `proof/store.bend`, 121 lines and 2 lemmas added to `proof/web.bend` |
+| Checking `proof/store.bend` | 1.5s |
+| Scenarios | 41 new |
+| `@unsafe` or foreign code | None |
+| `--verdict` | Not run: Lean isn't installed in this environment |
+
+Most laws took no proof at all. A fact about one route's answers, or a handler given a concrete status, reduces to `{==}`. The rest needed a rewrite with the hypothesis and at most a match. `handlers_stay_in_range` stopped needing a case per handler: no route's answers hold a number, and a general lemma says such a reply is always in range. The two replay laws are short inductions. `writes_publish_not_saved` is a match on the request, where a request that never writes has an impossible hypothesis. The longest proof is the log's round trip, which reuses the codec round trip and adds a lemma that a record reads back from its encoded value.
+
+**Bugs**
+
+Proofs caught none. The first build hung on every request: the check for the blank line after the headers expected a carriage return as the fourth byte of `\r\n\r\n`, so a request never looked whole. The laws say nothing about the shell's bytes, and an end-to-end run found it in a minute. Scenarios now cover it. Killing the web process with a torn line in the log and a snapshot cut short brought it back with nothing lost: the torn line counted as a bad line, the broken snapshot was ignored, and the whole log was replayed.
+
+A code review then found four bugs that neither the proofs nor the tests had caught. The UTF-8 decoder let through surrogates, overlong forms and code points past U+10FFFF, because it didn't narrow the second byte after E0, ED, F0 and F4. A log write that failed partway left a torn line in the middle of the log, so the next acknowledged change was appended to it and lost on replay. The snapshot was read whole. The 500 for a failed write wasn't in the spec. The spec gap is now a law, `writes_publish_not_saved`, which would have caught it. The others are in the shell or the byte decoding, which no law covers, so scenarios cover them. Its three smaller findings were fixed too: empty lines before a POST no longer become its body, this plan no longer claims a snapshot law it lacks, and the contract script matches path parameters the way the server does.
+
+**Friction**
+
+- **No UTF-8 decoder:** Base reads a socket or file as bytes or as a String, and a String read can split a character between chunks. The decoder took 104 lines.
+- **No fsync or rename:** the log can't be forced to disk, so an acknowledged write survives a process crash but maybe not a power cut. The snapshot can't be written to a temporary file and renamed, so a crash mid-write leaves a broken snapshot. The shell copes by falling back to the whole log.
+- **Names:** a type called `Event` clashed with Base, so the log's entries are `Change` in Bend and `Event` in the spec.
+- **Literals:** `[195u]` is refused. A bare number is already a `U32`, and `n` makes a `Nat`.
+- **Memory:** the store is a list, so a lookup is linear. That's fine for this slice, but tens of thousands of appraisals will need an array store. The first version read the snapshot whole, as bytes, then a String, then a JSON tree, which would have broken the 512MB cap long before the store did. It's now a head line and a line per record, read and written a line at a time.
+- **Good:** the single-writer design was one recursive def with a channel, and it worked first time. Handlers taking a resolved `Op` meant every existing law about handlers kept its wording and covered the new routes unchanged.
 
 ### Milestone 4 API contract
 

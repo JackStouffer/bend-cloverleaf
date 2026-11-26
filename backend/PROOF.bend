@@ -19,6 +19,8 @@ import ./proof/nation.bend as PN
 import ./core/nation.bend as N
 import ./web/api.bend as WA
 import ./proof/web.bend as PW
+import ./proof/store.bend as PSt
+import ./web/store.bend as WSt
 
 # Proves every law in LAWS.bend. The working lemmas live in proof/, and this file
 # only connects them to the claims.
@@ -227,11 +229,26 @@ def Laws.route_schemas_are_distinct(op):
   match op:
     case WA.Health{}:
       {==}
+    case WA.Create{d, k, i}:
+      {==}
+    case WA.Fetch{f}:
+      {==}
+    case WA.Cancel{f}:
+      {==}
 
-def Laws.handlers_stay_in_range(op):
+def Laws.route_answers_are_free(op):
   match op:
     case WA.Health{}:
       {==}
+    case WA.Create{d, k, i}:
+      {==}
+    case WA.Fetch{f}:
+      {==}
+    case WA.Cancel{f}:
+      {==}
+
+def Laws.handlers_stay_in_range(op):
+  PW.reply_free(WA.Route.answers(WA.Op.route(op)), WA.Api.run(op), Laws.route_answers_are_free(op))
 
 def Laws.encoded_numbers_fit(s, v, w):
   PW.encoded_fits(s, v, w)
@@ -255,9 +272,94 @@ def Laws.route_schemas_are_wellformed(op):
   match op:
     case WA.Health{}:
       {==}
+    case WA.Create{d, k, i}:
+      {==}
+    case WA.Fetch{f}:
+      {==}
+    case WA.Cancel{f}:
+      {==}
 
 def Laws.error_schema_is_wellformed():
   {==}
 
 def Laws.dispatcher_errors_decode(code):
   PW.roundtrip(WA.Schemas.error(), (code, (None{}, Unit{})), {==}, {==})
+
+def Laws.replay_carries_on(xs, ys, s):
+  PSt.replay_append(xs, ys, s)
+
+def Laws.snapshot_then_rest_is_whole_log(es, n):
+  PSt.replay_resumes(es, n, WSt.Store.empty())
+
+def Laws.logged_change_reads_back(e):
+  PSt.change_back(e)
+
+def Laws.request_is_stored(s, r, fresh):
+  PSt.request_is_stored(s, r, fresh)
+
+def Laws.replayed_request_changes_nothing(s, r, x, known):
+  PSt.request_again_changes_nothing(s, r, x, known)
+
+def Laws.repeat_key_writes_nothing(d, r, id):
+  {==}
+
+def Laws.repeat_key_answers_200(d, r, id):
+  {==}
+
+def Laws.repeat_key_answers_the_stored_appraisal(d, r, id):
+  {==}
+
+def Laws.broken_request_writes_nothing(d, id, c, t, p):
+  PSt.broken_request_changes_nothing(d, id, c, t, p)
+
+def Laws.broken_request_answers_422(d, id, c, t, p):
+  PSt.broken_request_is_refused(d, id, c, t, p)
+
+def Laws.writes_publish_not_saved(op, c, w):
+  match op:
+    case WA.Health{}:
+      L.never({WA.Route.writes(WA.Op.route(WA.Health{})) == True{} : Bool}, Equal.cong(Maybe<&2, WSt.Change>, Bool, m => Maybe.is_some(&2, WSt.Change, m), None{}, Some{c}, w))
+    case WA.Create{d, k, i}:
+      {==}
+    case WA.Fetch{f}:
+      L.never({WA.Route.writes(WA.Op.route(WA.Fetch{f})) == True{} : Bool}, Equal.cong(Maybe<&2, WSt.Change>, Bool, m => Maybe.is_some(&2, WSt.Change, m), None{}, Some{c}, w))
+    case WA.Cancel{f}:
+      {==}
+
+def Laws.good_request_is_logged_open(d, id, p):
+  PSt.good_request_is_logged(d, id, p)
+
+def Laws.good_request_answers_201(d, id, p):
+  PSt.good_request_is_created(d, id, p)
+
+def Laws.new_appraisal_is_open(id, d):
+  match d:
+    case WSt.Draft{k, a, z, st, due}:
+      {==}
+
+def Laws.unknown_appraisal_answers_404():
+  {==}
+
+def Laws.cancelling_unknown_appraisal_answers_404():
+  {==}
+
+def Laws.cancelling_unknown_appraisal_writes_nothing():
+  {==}
+
+def Laws.reading_writes_nothing(m):
+  {==}
+
+def Laws.open_appraisal_is_cancelled(i, k, a, z, st, d):
+  {==}
+
+def Laws.locked_appraisal_writes_nothing(r, e):
+  PSt.locked_appraisal_isnt_cancelled(r, e)
+
+def Laws.locked_appraisal_answers_409(r, e):
+  PSt.locked_appraisal_is_a_conflict(r, e)
+
+def Laws.cancelling_twice_writes_nothing(i, k, a, z, st, d):
+  {==}
+
+def Laws.cancelling_twice_answers_200(i, k, a, z, st, d):
+  {==}

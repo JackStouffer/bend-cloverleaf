@@ -75,6 +75,8 @@ def has_miss(k, r, b, e):
   match r:
     case S.SStr{}:
       {==}
+    case S.SEnum{n, vs}:
+      {==}
     case S.SNat{}:
       {==}
     case S.SBool{}:
@@ -117,6 +119,8 @@ def rest_miss(k, r, b, e):
   match r:
     case S.SStr{}:
       {==}
+    case S.SEnum{n, vs}:
+      {==}
     case S.SNat{}:
       {==}
     case S.SBool{}:
@@ -153,6 +157,51 @@ def rest_miss(k, r, b, e):
 def MV(s: S.Schema) -> Data:
   Maybe<&2, S.Value(s)>
 
+def TM(vs: List<&2, String>) -> Data:
+  Maybe<&2, S.Tag(vs)>
+
+# A name the rest of an enum doesn't hold is never the name of one of its
+# values, so reading a value's name stops at that value.
+law tag_fresh:
+  for +v: String
+  for +vs: List<&2, String>
+  for +t: S.Tag(vs)
+  for +e: {S.Tags.fresh(v, vs) == True{} : Bool}
+  {J.Text.same(S.Tag.name(vs, t), v) == False{} : Bool}
+
+def tag_fresh(v, vs, t, e):
+  match vs:
+    case Nil{}:
+      Empty.absurd({J.Text.same(Empty.absurd(String, t), v) == False{} : Bool}, t)
+    case Con{y, ys}:
+      match t:
+        case Done{u}:
+          not_t(J.Text.same(y, v), L.and_l(Bool.not(J.Text.same(y, v)), S.Tags.fresh(v, ys), e))
+        case Fail{x}:
+          tag_fresh(v, ys, x, L.and_r(Bool.not(J.Text.same(y, v)), S.Tags.fresh(v, ys), e))
+
+law tag_read:
+  for +vs: List<&2, String>
+  for +t: S.Tag(vs)
+  for +e: {S.Tags.distinct(vs) == True{} : Bool}
+  {S.Tag.read(vs, S.Tag.name(vs, t)) == Some{t} : TM(vs)}
+
+def tag_read(vs, t, e):
+  match vs:
+    case Nil{}:
+      Empty.absurd({S.Tag.read(Nil{}, Empty.absurd(String, t)) == Some{t} : TM(Nil{})}, t)
+    case Con{v, rest}:
+      match t:
+        case Done{u}:
+          match u:
+            case Unit{}:
+              %Equal.sym(Bool, J.Text.same(v, v), True{}, same_refl(v)) : {S.Tag.pick(rest, _, S.Tag.read(rest, v)) == Some{Done{Unit{}}} : TM(Con{v, rest})}
+              {==}
+        case Fail{x}:
+          %Equal.sym(Bool, J.Text.same(S.Tag.name(rest, x), v), False{}, tag_fresh(v, rest, x, L.and_l(S.Tags.fresh(v, rest), S.Tags.distinct(rest), e))) : {S.Tag.pick(rest, _, S.Tag.read(rest, S.Tag.name(rest, x))) == Some{Fail{x}} : TM(Con{v, rest})}
+          %Equal.sym(TM(rest), S.Tag.read(rest, S.Tag.name(rest, x)), Some{x}, tag_read(rest, x, L.and_r(S.Tags.fresh(v, rest), S.Tags.distinct(rest), e))) : {S.Tag.pick(rest, False{}, _) == Some{Fail{x}} : TM(Con{v, rest})}
+          {==}
+
 law roundtrip:
   for +s: S.Schema
   for +v: S.Value(s)
@@ -164,6 +213,8 @@ def roundtrip(s, v, e, w):
   match s:
     case S.SStr{}:
       {==}
+    case S.SEnum{n, vs}:
+      tag_read(vs, v, e)
     case S.SNat{}:
       %Equal.sym(Bool, J.Json.small(v), True{}, w) : {S.Codec.nat.pick(_, v) == Some{v} : MV(S.SNat{})}
       {==}
@@ -245,6 +296,8 @@ def encoded_fits(s, v, w):
   match s:
     case S.SStr{}:
       {==}
+    case S.SEnum{n, vs}:
+      {==}
     case S.SNat{}:
       w
     case S.SBool{}:
@@ -306,6 +359,8 @@ def missing_value_refused(s, w):
   match s:
     case S.SStr{}:
       {==}
+    case S.SEnum{n, vs}:
+      {==}
     case S.SNat{}:
       {==}
     case S.SBool{}:
@@ -334,3 +389,69 @@ law missing_field_refused:
 def missing_field_refused(n, k, f, r, w):
   %Equal.sym(MV(f), S.decode(f, J.JNil{}), None{}, missing_value_refused(f, w)) : {S.Codec.both(S.Value(f), S.Value(r), _, S.decode(r, S.Take.rest(k, J.JNil{}))) == None{} : MV(S.SObj{n, S.SField{k, f, r}})}
   {==}
+
+# A schema with no number in it holds every value in range, so a handler whose
+# answers hold no number can't send one out of range.
+law within_free:
+  for +s: S.Schema
+  for +v: S.Value(s)
+  for +f: {S.Schema.free(s) == True{} : Bool}
+  {S.Schema.within(s, v) == True{} : Bool}
+
+def within_free(s, v, f):
+  match s:
+    case S.SStr{}:
+      {==}
+    case S.SEnum{n, vs}:
+      {==}
+    case S.SNat{}:
+      L.never({J.Json.small(v) == True{} : Bool}, f)
+    case S.SBool{}:
+      {==}
+    case S.SList{it}:
+      within_free(it, v, f)
+    case S.SItems{i}:
+      match v:
+        case Nil{}:
+          {==}
+        case Con{x, rest}:
+          L.and_i(S.Schema.within(i, x), S.Schema.within(S.SItems{i}, rest),
+            within_free(i, x, f),
+            within_free(S.SItems{i}, rest, f))
+    case S.SObj{n, r}:
+      within_free(r, v, f)
+    case S.SField{k, g, r}:
+      match v:
+        case (a, b):
+          L.and_i(S.Schema.within(g, a), S.Schema.within(r, b),
+            within_free(g, a, L.and_l(S.Schema.free(g), S.Schema.free(r), f)),
+            within_free(r, b, L.and_r(S.Schema.free(g), S.Schema.free(r), f)))
+    case S.SOpt{k, g, r}:
+      match v:
+        case (m, b):
+          match m:
+            case None{}:
+              within_free(r, b, L.and_r(S.Schema.free(g), S.Schema.free(r), f))
+            case Some{a}:
+              L.and_i(S.Schema.within(g, a), S.Schema.within(r, b),
+                within_free(g, a, L.and_l(S.Schema.free(g), S.Schema.free(r), f)),
+                within_free(r, b, L.and_r(S.Schema.free(g), S.Schema.free(r), f)))
+    case S.SEnd{}:
+      {==}
+
+law reply_free:
+  for +as: List<&2, A.Answer>
+  for +r: A.Reply(as)
+  for +f: {A.Answers.free(as) == True{} : Bool}
+  {A.Reply.within(as, r) == True{} : Bool}
+
+def reply_free(as, r, f):
+  match as:
+    case Nil{}:
+      Empty.absurd({A.Reply.within(Nil{}, r) == True{} : Bool}, r)
+    case Con{A.Answer{st, d, s}, rest}:
+      match r:
+        case Done{v}:
+          within_free(s, v, L.and_l(S.Schema.free(s), A.Answers.free(rest), f))
+        case Fail{x}:
+          reply_free(rest, x, L.and_r(S.Schema.free(s), A.Answers.free(rest), f))

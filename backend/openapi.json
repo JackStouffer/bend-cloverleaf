@@ -32,6 +32,190 @@
           }
         }
       }
+    },
+    "/api/v1/appraisals": {
+      "post": {
+        "operationId": "createAppraisal",
+        "summary": "Request an appraisal. Sending the same key again is safe",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewAppraisal"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The appraisal was requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Appraisal"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "An appraisal with this key was already requested, so nothing changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Appraisal"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request breaks a rule, which error names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The request was refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "The change could not be saved, so nothing changed and the request can be sent again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/appraisals/{id}": {
+      "get": {
+        "operationId": "getAppraisal",
+        "summary": "Read an appraisal",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The appraisal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Appraisal"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No appraisal has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The request was refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/appraisals/{id}/cancel": {
+      "post": {
+        "operationId": "cancelAppraisal",
+        "summary": "Cancel an appraisal. Cancelling one that's already cancelled changes nothing",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The appraisal, now cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Appraisal"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No appraisal has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The appraisal is underway or completed, so it can't be cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The request was refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "The change could not be saved, so nothing changed and the request can be sent again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -47,6 +231,133 @@
           "status"
         ],
         "additionalProperties": false
+      },
+      "NewAppraisal": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/UsState"
+          },
+          "due": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "address",
+          "zip",
+          "state",
+          "due"
+        ],
+        "additionalProperties": false
+      },
+      "UsState": {
+        "type": "string",
+        "enum": [
+          "AL",
+          "AR",
+          "AZ",
+          "CA",
+          "CO",
+          "CT",
+          "DE",
+          "FL",
+          "GA",
+          "IA",
+          "ID",
+          "IL",
+          "IN",
+          "KS",
+          "KY",
+          "LA",
+          "MA",
+          "MD",
+          "ME",
+          "MI",
+          "MN",
+          "MO",
+          "MS",
+          "MT",
+          "NC",
+          "ND",
+          "NE",
+          "NH",
+          "NJ",
+          "NM",
+          "NV",
+          "NY",
+          "OH",
+          "OK",
+          "OR",
+          "PA",
+          "RI",
+          "SC",
+          "SD",
+          "TN",
+          "TX",
+          "UT",
+          "VA",
+          "VT",
+          "WA",
+          "WI",
+          "WV",
+          "WY"
+        ]
+      },
+      "Appraisal": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/UsState"
+          },
+          "due": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AppraisalStatus"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "address",
+          "zip",
+          "state",
+          "due",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "AppraisalStatus": {
+        "type": "string",
+        "enum": [
+          "open",
+          "underway",
+          "completed",
+          "failed",
+          "cancelled"
+        ]
       },
       "Error": {
         "type": "object",

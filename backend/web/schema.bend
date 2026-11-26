@@ -10,8 +10,10 @@ import ./json.bend as J
 # one def can then walk any schema without mutual recursion. An object is
 # SObj{name, row}, where the row is a chain of SField and SOpt ending in SEnd.
 # A list is SList{SItems{item}}. Build them with Schema.obj and Schema.list.
+# An enum is SEnum{name, values}, a string that must be one of its values.
 type Schema is Data:
   SStr{}
+  SEnum{name: String, values: List<&2, String>}
   SNat{}
   SBool{}
   SList{items: Schema}
@@ -27,12 +29,81 @@ def Schema.list(item: Schema) -> Schema:
 def Schema.obj(name: String, row: Schema) -> Schema:
   SObj{name, row}
 
+# An enum's value says which of its names it is: Done for the first name, and
+# Fail for one of the rest. So a value is always one of the names, and an enum
+# with no names has no values at all.
+def Tag(vs: List<&2, String>) -> Data:
+  match vs:
+    case Nil{}:
+      Empty
+    case Con{v, rest}:
+      Result<&2, &2, Tag(rest), Unit>
+
+def Tag.name(vs: List<&2, String>, t: Tag(vs)) -> String:
+  match vs:
+    case Nil{}:
+      Empty.absurd(String, t)
+    case Con{v, rest}:
+      match t:
+        case Done{u}:
+          v
+        case Fail{x}:
+          Tag.name(rest, x)
+
+def Tag.shift(-rest: List<&2, String>, m: Maybe<&2, Tag(rest)>) -> Maybe<&2, Result<&2, &2, Tag(rest), Unit>>:
+  match m:
+    case None{}:
+      None{}
+    case Some{x}:
+      Some{Fail{x}}
+
+def Tag.pick(-rest: List<&2, String>, hit: Bool, later: Maybe<&2, Tag(rest)>) -> Maybe<&2, Result<&2, &2, Tag(rest), Unit>>:
+  match hit:
+    case True{}:
+      Some{Done{Unit{}}}
+    case False{}:
+      Tag.shift(rest, later)
+
+# The first of vs named s, or None.
+def Tag.read(vs: List<&2, String>, +s: String) -> Maybe<&2, Tag(vs)>:
+  match vs:
+    case Nil{}:
+      None{}
+    case Con{v, +rest}:
+      Tag.pick(rest, J.Text.same(s, v), Tag.read(rest, s))
+
+# No name in vs is v.
+def Tags.fresh(+v: String, vs: List<&2, String>) -> Bool:
+  match vs:
+    case Nil{}:
+      True{}
+    case Con{y, ys}:
+      Bool.not(J.Text.same(y, v)) && Tags.fresh(v, ys)
+
+def Tags.distinct(vs: List<&2, String>) -> Bool:
+  match vs:
+    case Nil{}:
+      True{}
+    case Con{+v, +rest}:
+      Tags.fresh(v, rest) && Tags.distinct(rest)
+
+def Tags.same(a: List<&2, String>, b: List<&2, String>) -> Bool:
+  match a b:
+    case Nil{} Nil{}:
+      True{}
+    case Con{x, xs} Con{y, ys}:
+      J.Text.same(x, y) && Tags.same(xs, ys)
+    case _ _:
+      False{}
+
 # Field values come as nested pairs in the row's order, ending in Unit, and an
 # optional field's value is a Maybe.
 def Value(s: Schema) -> Data:
   match s:
     case SStr{}:
       String
+    case SEnum{n, vs}:
+      Tag(vs)
     case SNat{}:
       Nat
     case SBool{}:
@@ -58,6 +129,8 @@ def encode(s: Schema, v: Value(s)) -> J.Json:
   match s:
     case SStr{}:
       J.JStr{v}
+    case SEnum{n, vs}:
+      J.JStr{Tag.name(vs, v)}
     case SNat{}:
       J.JNum{v}
     case SBool{}:
@@ -170,6 +243,13 @@ def Codec.str(j: J.Json) -> Maybe<&2, String>:
     case other:
       None{}
 
+def Codec.tag(vs: List<&2, String>, m: Maybe<&2, String>) -> Maybe<&2, Tag(vs)>:
+  match m:
+    case None{}:
+      None{}
+    case Some{s}:
+      Tag.read(vs, s)
+
 def Codec.nat.pick(ok: Bool, n: Nat) -> Maybe<&2, Nat>:
   match ok:
     case True{}:
@@ -198,6 +278,8 @@ def decode(s: Schema, +j: J.Json) -> Maybe<&2, Value(s)>:
   match s:
     case SStr{}:
       Codec.str(j)
+    case SEnum{n, vs}:
+      Codec.tag(vs, Codec.str(j))
     case SNat{}:
       Codec.nat(j)
     case SBool{}:
@@ -263,6 +345,24 @@ def Schema.within(s: Schema, v: Value(s)) -> Bool:
     case other:
       True{}
 
+# No number anywhere in s, so every value of s is within range.
+def Schema.free(s: Schema) -> Bool:
+  match s:
+    case SNat{}:
+      False{}
+    case SList{it}:
+      Schema.free(it)
+    case SItems{i}:
+      Schema.free(i)
+    case SObj{n, r}:
+      Schema.free(r)
+    case SField{k, f, r}:
+      Schema.free(f) && Schema.free(r)
+    case SOpt{k, f, r}:
+      Schema.free(f) && Schema.free(r)
+    case other:
+      True{}
+
 # Well-formed keys
 # ----------------
 
@@ -285,6 +385,8 @@ def Schema.distinct(s: Schema) -> Bool:
       Schema.distinct(it)
     case SItems{i}:
       Schema.distinct(i)
+    case SEnum{n, vs}:
+      Tags.distinct(vs)
     case SObj{n, r}:
       Schema.distinct(r)
     case SField{+k, f, +r}:
@@ -304,10 +406,12 @@ type Spot is Data:
   AtRow{}
 
 # Whether s has the shape its spot needs. Items only go inside a list, rows only
-# inside an object, and every field holds a value.
+# inside an object, every field holds a value, and an enum has a name.
 def Schema.fits(s: Schema, at: Spot) -> Bool:
   match s at:
     case SStr{} AtValue{}:
+      True{}
+    case SEnum{n, Con{v, rest}} AtValue{}:
       True{}
     case SNat{} AtValue{}:
       True{}
@@ -340,6 +444,8 @@ def Schema.same(a: Schema, b: Schema) -> Bool:
   match a b:
     case SStr{} SStr{}:
       True{}
+    case SEnum{n, xs} SEnum{m, ys}:
+      J.Text.same(n, m) && Tags.same(xs, ys)
     case SNat{} SNat{}:
       True{}
     case SBool{} SBool{}:
