@@ -287,6 +287,8 @@ Proven so far in `LAWS.bend`, for the pure core:
 - Codecs round-trip: decoding what a schema encodes gives back the same value, for any schema whose objects name each field once and any value whose numbers are at most `Json.Max`. Every route's schemas and every handler's reply are checked for those.
 - Every reply a handler can build has a status its route declares and a body that decodes under that status's schema, and every handler's reply fits its own route.
 - Every body a handler sends has numbers the parser can read back, so the server never sends what its own client contract refuses.
+- Every route schema is well formed, so a value never sits where only items or a row belong, and an object missing a required field is refused.
+- Every error body the dispatcher sends decodes under the published `Error` schema.
 - Each component name in the spec has one definition.
 
 Road times use the same idea as `publish`. The search isn't proven to find anything, so a lookup walks the path it left behind against the graph and reports only what that walk confirms. A search bug shows up as a refused lookup, which the shell won't report, never as a wrong time. `Array` is a tree in Base, so laws can reason about reads directly. An array can't be copied in a proof, so `proof/road.bend` proves the Base clone gives two provably equal live copies and builds on that.
@@ -526,9 +528,9 @@ Some injected bugs were caught because a proof script stopped matching the code,
 
 | Measure | Result |
 |---|---|
-| Laws | 8 new, in 58 lines |
-| Web code | 1,718 lines, of which 1,659 are pure |
-| Proofs | 298 lines and 13 lemmas in `proof/web.bend`, 0.17 proof lines per line of code |
+| Laws | 13 new, in 89 lines |
+| Web code | 1,886 lines, of which 1,834 are pure |
+| Proofs | 336 lines and 15 lemmas in `proof/web.bend`, 0.18 proof lines per line of code |
 | Checking `proof/web.bend` | 0.5s |
 | `@unsafe` or foreign code | None |
 | `--verdict` | Not run: Lean isn't installed in this environment |
@@ -537,7 +539,7 @@ The round trip took most of the proof work, and all of it was in object rows: a 
 
 **Bugs**
 
-Proofs caught no bug in the code as written, but a code review caught two that the laws had no way to state. The decoder took any number, while the parser and the spec stop at 14 digits, so the round trip held for values the server could send but its own clients would refuse. The decoder now refuses them too, the round trip gained a `Schema.within` precondition, and `every_response_parses_back` proves every handler stays in range. The request-line parser also recursed through the whole request before deciding, so a large header cost stack for nothing. It now scans tail-recursively and stops at the first match, and a scenario sends a 200,000 byte header. Two injected bugs were caught at once: a handler returning a number for a string field failed to typecheck, and a schema naming a field twice failed `route_schemas_are_distinct`. Renaming the health field in Bend made the drift check fail, and after regenerating, `tsc` rejected the frontend's use of the old name.
+Proofs caught no bug in the code as written, but a code review caught two that the laws had no way to state. The decoder took any number, while the parser and the spec stop at 14 digits, so the round trip held for values the server could send but its own clients would refuse. The decoder now refuses them too, the round trip gained a `Schema.within` precondition, and `every_response_parses_back` proves every handler stays in range. The request-line parser also recursed through the whole request before deciding, so a large header cost stack for nothing. It now scans tail-recursively and stops at the first match, and a scenario sends a 200,000 byte header. The review's smaller findings were fixed too. `HEAD` now answers wherever `GET` does, and empty lines before the request line are ignored. A status is now a type with its own reason phrase, so a response can't go out as "409 Unknown". Schemas gained a well-formedness check, because a field holding a bare list of items would have accepted a missing key. Dispatcher errors gained a law. `spec_names_agree` and `route_schemas_are_distinct` are stated through the helpers they check, so scenarios now show those helpers refusing a clash and a repeated key. Two injected bugs were caught at once: a handler returning a number for a string field failed to typecheck, and a schema naming a field twice failed `route_schemas_are_distinct`. Renaming the health field in Bend made the drift check fail, and after regenerating, `tsc` rejected the frontend's use of the old name.
 
 **Friction**
 

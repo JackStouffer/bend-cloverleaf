@@ -244,3 +244,20 @@ def Laws.every_handler_fits_its_route(op):
 
 def Laws.spec_names_agree():
   {==}
+
+def Laws.missing_value_is_refused(s, w):
+  PW.missing_value_refused(s, w)
+
+def Laws.missing_field_is_refused(n, k, f, r, w):
+  PW.missing_field_refused(n, k, f, r, w)
+
+def Laws.route_schemas_are_wellformed(op):
+  match op:
+    case WA.Health{}:
+      {==}
+
+def Laws.error_schema_is_wellformed():
+  {==}
+
+def Laws.dispatcher_errors_decode(code):
+  PW.roundtrip(WA.Schemas.error(), (code, (None{}, Unit{})), {==}, {==})

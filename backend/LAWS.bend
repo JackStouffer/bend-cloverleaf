@@ -592,3 +592,35 @@ law every_handler_fits_its_route:
 # the schema the route uses.
 law spec_names_agree:
   {WO.Spec.agree(WO.Spec.all(WA.Api.routes(WA.Api.ops()))) == True{} : Bool}
+
+# A value schema never accepts the JNil a missing key reads as.
+law missing_value_is_refused:
+  for +s: WS.Schema
+  for +w: {WS.Schema.wellformed(s) == True{} : Bool}
+  {WS.decode(s, WJ.JNil{}) == None{} : Maybe<&2, WS.Value(s)>}
+
+# So an object without one of its required fields is refused.
+law missing_field_is_refused:
+  for +n: String
+  for +k: String
+  for +f: WS.Schema
+  for +r: WS.Schema
+  for +w: {WS.Schema.wellformed(f) == True{} : Bool}
+  {WS.decode(WS.SObj{n, WS.SField{k, f, r}}, WJ.JObj{WJ.JNil{}}) == None{} : Maybe<&2, WS.Value(WS.SObj{n, WS.SField{k, f, r}})>}
+
+# Every schema in the route table is well formed, so its required fields are
+# required.
+law route_schemas_are_wellformed:
+  for +op: WA.Op
+  {WA.Answers.wellformed(WA.Route.answers(WA.Op.route(op))) == True{} : Bool}
+
+# The dispatcher's errors are in no route's answers, but they're published as
+# the 4XX answer, so their schema is well formed too.
+law error_schema_is_wellformed:
+  {WS.Schema.wellformed(WA.Schemas.error()) == True{} : Bool}
+
+# Every error body the dispatcher sends decodes under the published Error
+# schema, back to the code it was sent with.
+law dispatcher_errors_decode:
+  for +code: String
+  {WS.decode(WA.Schemas.error(), WA.Api.error.body(code)) == Some{(code, (None{}, Unit{}))} : Maybe<&2, WS.Value(WA.Schemas.error())>}

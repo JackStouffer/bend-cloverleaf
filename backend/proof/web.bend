@@ -226,11 +226,11 @@ def reply_fits(as, r, e, w):
     case Con{A.Answer{st, d, s}, rest}:
       match r:
         case Done{v}:
-          %Equal.sym(Bool, Nat.is_eq(st, st), True{}, L.eq_refl(st)) : {Bool.or(Bool.and(_, Maybe.is_some(&2, S.Value(s), S.decode(s, S.encode(s, v)))), A.Answers.accepts(rest, st, S.encode(s, v))) == True{} : Bool}
-          %Equal.sym(MV(s), S.decode(s, S.encode(s, v)), Some{v}, roundtrip(s, v, L.and_l(S.Schema.distinct(s), A.Answers.distinct(rest), e), w)) : {Bool.or(Bool.and(True{}, Maybe.is_some(&2, S.Value(s), _)), A.Answers.accepts(rest, st, S.encode(s, v))) == True{} : Bool}
+          %Equal.sym(Bool, Nat.is_eq(A.Status.code(st), A.Status.code(st)), True{}, L.eq_refl(A.Status.code(st))) : {Bool.or(Bool.and(_, Maybe.is_some(&2, S.Value(s), S.decode(s, S.encode(s, v)))), A.Answers.accepts(rest, A.Status.code(st), S.encode(s, v))) == True{} : Bool}
+          %Equal.sym(MV(s), S.decode(s, S.encode(s, v)), Some{v}, roundtrip(s, v, L.and_l(S.Schema.distinct(s), A.Answers.distinct(rest), e), w)) : {Bool.or(Bool.and(True{}, Maybe.is_some(&2, S.Value(s), _)), A.Answers.accepts(rest, A.Status.code(st), S.encode(s, v))) == True{} : Bool}
           {==}
         case Fail{x}:
-          L.or_right(Bool.and(Nat.is_eq(st, A.Reply.status(rest, x)), Maybe.is_some(&2, S.Value(s), S.decode(s, A.Reply.body(rest, x)))),
+          L.or_right(Bool.and(Nat.is_eq(A.Status.code(st), A.Reply.status(rest, x)), Maybe.is_some(&2, S.Value(s), S.decode(s, A.Reply.body(rest, x)))),
             A.Answers.accepts(rest, A.Reply.status(rest, x), A.Reply.body(rest, x)),
             reply_fits(rest, x, L.and_r(S.Schema.distinct(s), A.Answers.distinct(rest), e), w))
 
@@ -296,3 +296,41 @@ def reply_body_fits(as, r, w):
           encoded_fits(s, v, w)
         case Fail{x}:
           reply_body_fits(rest, x, w)
+
+law missing_value_refused:
+  for +s: S.Schema
+  for +w: {S.Schema.wellformed(s) == True{} : Bool}
+  {S.decode(s, J.JNil{}) == None{} : MV(s)}
+
+def missing_value_refused(s, w):
+  match s:
+    case S.SStr{}:
+      {==}
+    case S.SNat{}:
+      {==}
+    case S.SBool{}:
+      {==}
+    case S.SList{it}:
+      {==}
+    case S.SObj{n, r}:
+      {==}
+    case S.SItems{i}:
+      L.never({S.decode(S.SItems{i}, J.JNil{}) == None{} : MV(S.SItems{i})}, w)
+    case S.SField{k, f, r}:
+      L.never({S.decode(S.SField{k, f, r}, J.JNil{}) == None{} : MV(S.SField{k, f, r})}, w)
+    case S.SOpt{k, f, r}:
+      L.never({S.decode(S.SOpt{k, f, r}, J.JNil{}) == None{} : MV(S.SOpt{k, f, r})}, w)
+    case S.SEnd{}:
+      L.never({S.decode(S.SEnd{}, J.JNil{}) == None{} : MV(S.SEnd{})}, w)
+
+law missing_field_refused:
+  for +n: String
+  for +k: String
+  for +f: S.Schema
+  for +r: S.Schema
+  for +w: {S.Schema.wellformed(f) == True{} : Bool}
+  {S.decode(S.SObj{n, S.SField{k, f, r}}, J.JObj{J.JNil{}}) == None{} : MV(S.SObj{n, S.SField{k, f, r}})}
+
+def missing_field_refused(n, k, f, r, w):
+  %Equal.sym(MV(f), S.decode(f, J.JNil{}), None{}, missing_value_refused(f, w)) : {S.Codec.both(S.Value(f), S.Value(r), _, S.decode(r, S.Take.rest(k, J.JNil{}))) == None{} : MV(S.SObj{n, S.SField{k, f, r}})}
+  {==}

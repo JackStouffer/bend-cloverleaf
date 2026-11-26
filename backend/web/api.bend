@@ -12,6 +12,7 @@ import ./schema.bend as S
 
 type Method is Data:
   Get{}
+  Head{}
   Post{}
   Put{}
   Patch{}
@@ -22,6 +23,8 @@ def Method.name(m: Method) -> String:
   match m:
     case Get{}:
       "GET"
+    case Head{}:
+      "HEAD"
     case Post{}:
       "POST"
     case Put{}:
@@ -38,6 +41,8 @@ def Method.key(m: Method) -> String:
   match m:
     case Get{}:
       "get"
+    case Head{}:
+      "head"
     case Post{}:
       "post"
     case Put{}:
@@ -54,6 +59,8 @@ def Method.same(a: Method, b: Method) -> Bool:
   match a b:
     case Get{} Get{}:
       True{}
+    case Head{} Head{}:
+      True{}
     case Post{} Post{}:
       True{}
     case Put{} Put{}:
@@ -65,6 +72,30 @@ def Method.same(a: Method, b: Method) -> Bool:
     case _ _:
       False{}
 
+# Whether a request with method asked can use a route with method m. HEAD can
+# use any GET route, as RFC 9110 asks, so the route table never lists HEAD.
+def Method.serves(asked: Method, m: Method) -> Bool:
+  match asked m:
+    case Head{} Get{}:
+      True{}
+    case a b:
+      Method.same(a, b)
+
+def Method.is_head(m: Method) -> Bool:
+  match m:
+    case Head{}:
+      True{}
+    case other:
+      False{}
+
+# A method as a 405's Allow header lists it, with HEAD wherever GET is.
+def Method.allows(m: Method) -> String:
+  match m:
+    case Get{}:
+      "GET, HEAD"
+    case other:
+      Method.name(other)
+
 def Method.pick(same: Bool, m: Method, rest: Method) -> Method:
   match same:
     case True{}:
@@ -75,13 +106,75 @@ def Method.pick(same: Bool, m: Method, rest: Method) -> Method:
 def Method.parse(+s: String) -> Method:
   Method.pick(J.Text.same(s, "GET"), Get{},
     Method.pick(J.Text.same(s, "POST"), Post{},
+      Method.pick(J.Text.same(s, "HEAD"), Head{},
       Method.pick(J.Text.same(s, "PUT"), Put{},
         Method.pick(J.Text.same(s, "PATCH"), Patch{},
-          Method.pick(J.Text.same(s, "DELETE"), Delete{}, Other{})))))
+          Method.pick(J.Text.same(s, "DELETE"), Delete{}, Other{}))))))
+
+# The statuses the API answers with. A status is a value with its own reason
+# phrase, so a response can't go out with a code the reason table doesn't know.
+# There's no 204, because every answer has a JSON body.
+type Status is Data:
+  OK{}
+  Created{}
+  BadRequest{}
+  Unauthorized{}
+  Forbidden{}
+  NotFound{}
+  MethodNotAllowed{}
+  Conflict{}
+  Unprocessable{}
+  ServerError{}
+
+def Status.code(s: Status) -> Nat:
+  match s:
+    case OK{}:
+      200n
+    case Created{}:
+      201n
+    case BadRequest{}:
+      400n
+    case Unauthorized{}:
+      401n
+    case Forbidden{}:
+      403n
+    case NotFound{}:
+      404n
+    case MethodNotAllowed{}:
+      405n
+    case Conflict{}:
+      409n
+    case Unprocessable{}:
+      422n
+    case ServerError{}:
+      500n
+
+def Status.reason(s: Status) -> String:
+  match s:
+    case OK{}:
+      "OK"
+    case Created{}:
+      "Created"
+    case BadRequest{}:
+      "Bad Request"
+    case Unauthorized{}:
+      "Unauthorized"
+    case Forbidden{}:
+      "Forbidden"
+    case NotFound{}:
+      "Not Found"
+    case MethodNotAllowed{}:
+      "Method Not Allowed"
+    case Conflict{}:
+      "Conflict"
+    case Unprocessable{}:
+      "Unprocessable Content"
+    case ServerError{}:
+      "Internal Server Error"
 
 # A status a route can answer with, and the schema of its body.
 type Answer is Data:
-  Answer{status: Nat, description: String, schema: S.Schema}
+  Answer{status: Status, description: String, schema: S.Schema}
 
 type Route is Data:
   Route{method: Method, path: String, id: String, summary: String, answers: List<&2, Answer>}
@@ -121,9 +214,21 @@ def Reply.status(as: List<&2, Answer>, r: Reply(as)) -> Nat:
     case Con{Answer{st, d, s}, rest}:
       match r:
         case Done{v}:
-          st
+          Status.code(st)
         case Fail{x}:
           Reply.status(rest, x)
+
+# The reply's status as a value, for its reason phrase.
+def Reply.state(as: List<&2, Answer>, r: Reply(as)) -> Status:
+  match as:
+    case Nil{}:
+      Empty.absurd(Status, r)
+    case Con{Answer{st, d, s}, rest}:
+      match r:
+        case Done{v}:
+          st
+        case Fail{x}:
+          Reply.state(rest, x)
 
 def Reply.body(as: List<&2, Answer>, r: Reply(as)) -> J.Json:
   match as:
@@ -156,7 +261,7 @@ def Answers.accepts(as: List<&2, Answer>, +status: Nat, +j: J.Json) -> Bool:
     case Nil{}:
       False{}
     case Con{Answer{st, d, s}, rest}:
-      Bool.and(Nat.is_eq(st, status), Maybe.is_some(&2, S.Value(s), S.decode(s, j))) || Answers.accepts(rest, status, j)
+      Bool.and(Nat.is_eq(Status.code(st), status), Maybe.is_some(&2, S.Value(s), S.decode(s, j))) || Answers.accepts(rest, status, j)
 
 def Answers.distinct(as: List<&2, Answer>) -> Bool:
   match as:
@@ -164,6 +269,13 @@ def Answers.distinct(as: List<&2, Answer>) -> Bool:
       True{}
     case Con{Answer{st, d, s}, rest}:
       S.Schema.distinct(s) && Answers.distinct(rest)
+
+def Answers.wellformed(as: List<&2, Answer>) -> Bool:
+  match as:
+    case Nil{}:
+      True{}
+    case Con{Answer{st, d, s}, rest}:
+      S.Schema.wellformed(s) && Answers.wellformed(rest)
 
 # Schemas
 # -------
@@ -185,7 +297,7 @@ def Op.route(op: Op) -> Route:
   match op:
     case Health{}:
       Route{Get{}, "/api/health", "getHealth", "Whether the web process is up",
-        [Answer{200n, "The web process is up", Schemas.health()}]}
+        [Answer{OK{}, "The web process is up", Schemas.health()}]}
 
 def Api.ops() -> List<&2, Op>:
   [Health{}]
@@ -276,38 +388,54 @@ def Http.method(cut: Maybe<&2, Cut>) -> Maybe<&2, Line>:
     case None{}:
       None{}
 
+# Whether s starts with a CR or an LF.
+def Text.blank(s: String) -> Bool:
+  match s:
+    case SCon{+c, t}:
+      Nat.is_eq(J.Text.code(c), 13n) || Nat.is_eq(J.Text.code(c), 10n)
+    case SNil{}:
+      False{}
+
+# s without its leading CRs and LFs. hit says s starts with one.
+def Text.skip.go(s: String, hit: Bool) -> String:
+  match s hit:
+    case SCon{c, +t} True{}:
+      Text.skip.go(t, Text.blank(t))
+    case rest other:
+      rest
+
+def Text.skip(+s: String) -> String:
+  Text.skip.go(s, Text.blank(s))
+
+# Empty lines before the request line are ignored, as RFC 9112 asks.
 def Http.line(text: String) -> Maybe<&2, Line>:
-  Http.method(Text.cut(32n, text))
+  Http.method(Text.cut(32n, Text.skip(text)))
 
-def Http.reason(status: Nat) -> String:
-  match status:
-    case 200n:
-      "OK"
-    case 201n:
-      "Created"
-    case 400n:
-      "Bad Request"
-    case 404n:
-      "Not Found"
-    case 405n:
-      "Method Not Allowed"
-    case other:
-      "Unknown"
+def Http.body(send: Bool, body: String) -> String:
+  match send:
+    case True{}:
+      body
+    case False{}:
+      ""
 
-# One response. The web process closes each connection after it answers.
-def Http.response(+status: Nat, headers: String, +body: String) -> String:
-  "HTTP/1.1 " ++ Nat.show(status) ++ " " ++ Http.reason(status)
+# One response. The web process closes each connection after it answers. A
+# HEAD request gets the same headers with no body, so send is False for it.
+def Http.response(+status: Status, headers: String, +body: String, send: Bool) -> String:
+  "HTTP/1.1 " ++ Nat.show(Status.code(status)) ++ " " ++ Status.reason(status)
     ++ "\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: "
-    ++ Nat.show(J.Text.bytes(body, 0n)) ++ "\r\n" ++ headers ++ "\r\n" ++ body
+    ++ Nat.show(J.Text.bytes(body, 0n)) ++ "\r\n" ++ headers ++ "\r\n" ++ Http.body(send, body)
 
 # Errors from the dispatcher use the Error schema, so they're typed like any
 # other answer.
-def Api.error(status: Nat, headers: String, code: String) -> String:
-  Http.response(status, headers, J.Json.print(S.encode(Schemas.error(), (code, (None{}, Unit{})))))
+def Api.error.body(code: String) -> J.Json:
+  S.encode(Schemas.error(), (code, (None{}, Unit{})))
 
-def Api.reply(+op: Op) -> String:
-  Http.response(Reply.status(Route.answers(Op.route(op)), Api.run(op)), "",
-    J.Json.print(Reply.body(Route.answers(Op.route(op)), Api.run(op))))
+def Api.error(status: Status, headers: String, code: String, send: Bool) -> String:
+  Http.response(status, headers, J.Json.print(Api.error.body(code)), send)
+
+def Api.reply(+op: Op, send: Bool) -> String:
+  Http.response(Reply.state(Route.answers(Op.route(op)), Api.run(op)), "",
+    J.Json.print(Reply.body(Route.answers(Op.route(op)), Api.run(op))), send)
 
 # Dispatch
 # --------
@@ -325,14 +453,14 @@ def Api.hit(+m: Method, +path: String, ops: List<&2, Op>) -> Maybe<&2, Op>:
     case Nil{}:
       None{}
     case Con{+op, rest}:
-      Api.hit.pick(Method.same(m, Route.method(Op.route(op))) && J.Text.same(path, Route.path(Op.route(op))), op, Api.hit(m, path, rest))
+      Api.hit.pick(Method.serves(m, Route.method(Op.route(op))) && J.Text.same(path, Route.path(Op.route(op))), op, Api.hit(m, path, rest))
 
 def Api.allow.pick(same: Bool, m: Method, more: Bool, rest: String) -> String:
   match same more:
     case True{} True{}:
-      Method.name(m) ++ ", " ++ rest
+      Method.allows(m) ++ ", " ++ rest
     case True{} False{}:
-      Method.name(m) ++ rest
+      Method.allows(m) ++ rest
     case False{} _:
       rest
 
@@ -353,26 +481,26 @@ def Api.allow(+path: String, ops: List<&2, Op>) -> String:
       Api.allow.pick(J.Text.same(path, Route.path(Op.route(op))), Route.method(Op.route(op)),
         Api.allow.more(path, rest), Api.allow(path, rest))
 
-def Api.missing(allow: String) -> String:
+def Api.missing(allow: String, send: Bool) -> String:
   match allow:
     case SNil{}:
-      Api.error(404n, "", "not_found")
+      Api.error(NotFound{}, "", "not_found", send)
     case SCon{c, t}:
-      Api.error(405n, "Allow: " ++ SCon{c, t} ++ "\r\n", "method_not_allowed")
+      Api.error(MethodNotAllowed{}, "Allow: " ++ SCon{c, t} ++ "\r\n", "method_not_allowed", send)
 
-def Api.found(hit: Maybe<&2, Op>, allow: String) -> String:
+def Api.found(hit: Maybe<&2, Op>, allow: String, send: Bool) -> String:
   match hit:
     case Some{op}:
-      Api.reply(op)
+      Api.reply(op, send)
     case None{}:
-      Api.missing(allow)
+      Api.missing(allow, send)
 
 def Api.dispatch(line: Maybe<&2, Line>) -> String:
   match line:
-    case Some{Line{m, +path}}:
-      Api.found(Api.hit(m, path, Api.ops()), Api.allow(path, Api.ops()))
+    case Some{Line{+m, +path}}:
+      Api.found(Api.hit(m, path, Api.ops()), Api.allow(path, Api.ops()), Bool.not(Method.is_head(m)))
     case None{}:
-      Api.error(400n, "", "bad_request")
+      Api.error(BadRequest{}, "", "bad_request", True{})
 
 # The whole web handler: request text in, response text out.
 def Api.handle(text: String) -> String:

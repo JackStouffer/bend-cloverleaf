@@ -294,6 +294,46 @@ def Schema.distinct(s: Schema) -> Bool:
     case other:
       True{}
 
+# Well-formed shapes
+# ------------------
+
+# Where a schema sits: as a value, as a list's items, or as an object's row.
+type Spot is Data:
+  AtValue{}
+  AtItems{}
+  AtRow{}
+
+# Whether s has the shape its spot needs. Items only go inside a list, rows only
+# inside an object, and every field holds a value.
+def Schema.fits(s: Schema, at: Spot) -> Bool:
+  match s at:
+    case SStr{} AtValue{}:
+      True{}
+    case SNat{} AtValue{}:
+      True{}
+    case SBool{} AtValue{}:
+      True{}
+    case SList{it} AtValue{}:
+      Schema.fits(it, AtItems{})
+    case SItems{i} AtItems{}:
+      Schema.fits(i, AtValue{})
+    case SObj{n, r} AtValue{}:
+      Schema.fits(r, AtRow{})
+    case SField{k, f, r} AtRow{}:
+      Schema.fits(f, AtValue{}) && Schema.fits(r, AtRow{})
+    case SOpt{k, f, r} AtRow{}:
+      Schema.fits(f, AtValue{}) && Schema.fits(r, AtRow{})
+    case SEnd{} AtRow{}:
+      True{}
+    case _ _:
+      False{}
+
+# A schema a route can use. A missing key reads as JNil, and only items and
+# rows accept JNil, so this is what makes a required field required. Every
+# schema in the route table is checked for it.
+def Schema.wellformed(s: Schema) -> Bool:
+  Schema.fits(s, AtValue{})
+
 # Structural equality, so the spec generator can tell two definitions of one
 # name apart.
 def Schema.same(a: Schema, b: Schema) -> Bool:

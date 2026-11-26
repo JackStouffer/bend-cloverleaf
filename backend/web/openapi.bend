@@ -168,7 +168,7 @@ def Spec.responses(as: List<&2, A.Answer>) -> J.Json:
     case Nil{}:
       J.JField{"4XX", Spec.response("The request was refused", A.Schemas.error()), J.JNil{}}
     case Con{A.Answer{st, d, s}, rest}:
-      J.JField{Nat.show(st), Spec.response(d, s), Spec.responses(rest)}
+      J.JField{Nat.show(A.Status.code(st)), Spec.response(d, s), Spec.responses(rest)}
 
 def Spec.operation(r: A.Route) -> J.Json:
   match r:
