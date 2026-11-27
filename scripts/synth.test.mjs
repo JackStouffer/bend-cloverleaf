@@ -83,7 +83,7 @@ test("a contractor works some days of the horizon, in order, at their hours", ()
   const rand = random(3);
   for (let i = 0; i < 200; i++) {
     const c = makeCrew(rand, i + 1, { lat: 1, lon: 2 }, 20000, 7);
-    assert.ok(c.days.length >= 3 && c.days.length <= 6, `${c.days}`);
+    assert.ok(c.days.length >= 4 && c.days.length <= 6, `${c.days}`);
     assert.deepEqual([...c.days].sort((a, b) => a - b), c.days);
     assert.ok(c.days.every((d) => d >= 20000 && d < 20007));
     assert.ok([360, 420, 480, 540, 600].includes(c.maxMinutes));

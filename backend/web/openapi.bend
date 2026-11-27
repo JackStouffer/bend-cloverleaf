@@ -187,11 +187,12 @@ def Spec.content(s: S.Schema) -> J.Json:
 def Spec.response(d: String, s: S.Schema) -> J.Json:
   J.JObj{J.JField{"description", J.JStr{d}, J.JField{"content", Spec.content(s), J.JNil{}}}}
 
-# The shell's 500, on a route that can write to the log.
+# The shell's 500 when the log can't be written, and the dispatcher's when the
+# random bytes can't be read, on a route that can write.
 def Spec.unsaved(writes: Bool) -> J.Json:
   match writes:
     case True{}:
-      J.JField{"5XX", Spec.response("The change could not be saved, so nothing changed and the request can be sent again", A.Schemas.error()), J.JNil{}}
+      J.JField{"5XX", Spec.response("The server couldn't finish the request, so nothing changed and the request can be sent again", A.Schemas.error()), J.JNil{}}
     case False{}:
       J.JNil{}
 

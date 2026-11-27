@@ -1,6 +1,6 @@
 # Cloverleaf
 
-Cloverleaf plans daily routes for about 1,000 auto appraisal contractors across the lower 48. It's also a proof of concept for whether Bend works for general-purpose web programming, so record friction honestly instead of working around it quietly.
+Cloverleaf plans daily routes for about 1,000 auto appraisal contractors across the lower 48 and DC. It's also a proof of concept for whether Bend works for general-purpose web programming, so record friction honestly instead of working around it quietly.
 
 [PLAN.md](PLAN.md) holds the requirements, architecture, milestones and proof scope. Read it before starting work, and keep it updated when a decision changes.
 

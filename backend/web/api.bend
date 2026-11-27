@@ -352,8 +352,8 @@ def Endpoint.route(e: Endpoint) -> Route:
     case ECreate{}:
       Route{Post{}, "/api/v1/appraisals", "createAppraisal", "Request an appraisal. Sending the same key again is safe", Some{St.Schemas.draft()}, True{}, Dealers{},
         [Answer{Created{}, "The appraisal was requested", St.Schemas.appraisal()},
-         Answer{OK{}, "An appraisal with this key was already requested, so nothing changed", St.Schemas.appraisal()},
-         Answer{Unprocessable{}, "The request breaks a rule, which error names", Schemas.error()}]}
+         Answer{OK{}, "An appraisal with this key and body was already requested, so nothing changed", St.Schemas.appraisal()},
+         Answer{Unprocessable{}, "The request breaks a rule, which error names. key_reused means the key was already used for a different appraisal", Schemas.error()}]}
     case EFetch{}:
       Route{Get{}, "/api/v1/appraisals/{id}", "getAppraisal", "Read one of your organization's appraisals", None{}, False{}, Dealers{},
         [Answer{OK{}, "The appraisal", St.Schemas.appraisal()},
@@ -456,10 +456,20 @@ def Create.fresh(p: Maybe<&2, St.Problem>, d: St.Draft, id: String) -> CreateRep
     case Some{St.Problem{code, detail}}:
       Fail{Fail{Done{Api.fail(code, detail)}}}
 
+# A repeated key answers the appraisal it already has, but only when the body
+# asks for the same one. A different body under a used key is refused, so a
+# changed request is never mistaken for a safe retry.
+def Create.again(same: Bool, r: St.Rec) -> CreateReply():
+  match same:
+    case True{}:
+      Fail{Done{St.Rec.value(r)}}
+    case False{}:
+      Fail{Fail{Done{Api.fail("key_reused", "key was already used for an appraisal with a different address, zip, state or due date")}}}
+
 def Create.reply(known: Maybe<&2, St.Rec>, +d: St.Draft, id: String) -> CreateReply():
   match known:
-    case Some{r}:
-      Fail{Done{St.Rec.value(r)}}
+    case Some{+r}:
+      Create.again(St.Draft.matches(d, r), r)
     case None{}:
       Create.fresh(St.Draft.problem(d), d, id)
 
@@ -1014,6 +1024,17 @@ def Http.ready.from(+bs: List<&2, U32>) -> Bool:
 # lines before the request line, and the body has Content-Length bytes.
 def Http.ready(+bs: List<&2, U32>) -> Bool:
   Http.ready.from(Http.lead(bs))
+
+# The most bytes the web process reads for one request. nginx caps an API body
+# at 16KB, and the request line and headers get up to 64KB more.
+def Http.cap() -> Nat:
+  81920n
+
+# Whether to read more of a request: it isn't whole yet, and the total bytes
+# read so far are under the cap. A read can return less than it asked for, so
+# the bound is on bytes, not on reads.
+def Http.wants(+bs: List<&2, U32>, +total: Nat) -> Bool:
+  Bool.not(Http.ready(bs)) && Nat.is_lt(total, Http.cap())
 
 # Paths
 # -----

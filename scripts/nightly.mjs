@@ -14,6 +14,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const UNREACHABLE = 4294967295;
 const CAPS = { road: "1G", solver: "2G" };
@@ -84,7 +85,7 @@ function solve(synthDir, solverBin, threads, planner = "planner", forks = "4") {
 }
 
 const [command, ...args] = process.argv.slice(2);
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (command === "matrices" && args.length >= 3) matrices(...args);
   else if (command === "solve" && args.length >= 3) solve(...args);
   else {

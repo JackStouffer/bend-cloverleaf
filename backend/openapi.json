@@ -65,7 +65,7 @@
             }
           },
           "200": {
-            "description": "An appraisal with this key was already requested, so nothing changed",
+            "description": "An appraisal with this key and body was already requested, so nothing changed",
             "content": {
               "application/json": {
                 "schema": {
@@ -75,7 +75,7 @@
             }
           },
           "422": {
-            "description": "The request breaks a rule, which error names",
+            "description": "The request breaks a rule, which error names. key_reused means the key was already used for a different appraisal",
             "content": {
               "application/json": {
                 "schema": {
@@ -115,7 +115,7 @@
             }
           },
           "5XX": {
-            "description": "The change could not be saved, so nothing changed and the request can be sent again",
+            "description": "The server couldn't finish the request, so nothing changed and the request can be sent again",
             "content": {
               "application/json": {
                 "schema": {
@@ -281,7 +281,7 @@
             }
           },
           "5XX": {
-            "description": "The change could not be saved, so nothing changed and the request can be sent again",
+            "description": "The server couldn't finish the request, so nothing changed and the request can be sent again",
             "content": {
               "application/json": {
                 "schema": {
@@ -364,7 +364,7 @@
             }
           },
           "5XX": {
-            "description": "The change could not be saved, so nothing changed and the request can be sent again",
+            "description": "The server couldn't finish the request, so nothing changed and the request can be sent again",
             "content": {
               "application/json": {
                 "schema": {
@@ -447,7 +447,7 @@
             }
           },
           "5XX": {
-            "description": "The change could not be saved, so nothing changed and the request can be sent again",
+            "description": "The server couldn't finish the request, so nothing changed and the request can be sent again",
             "content": {
               "application/json": {
                 "schema": {
@@ -530,7 +530,7 @@
             }
           },
           "5XX": {
-            "description": "The change could not be saved, so nothing changed and the request can be sent again",
+            "description": "The server couldn't finish the request, so nothing changed and the request can be sent again",
             "content": {
               "application/json": {
                 "schema": {
@@ -594,6 +594,7 @@
           "CA",
           "CO",
           "CT",
+          "DC",
           "DE",
           "FL",
           "GA",
