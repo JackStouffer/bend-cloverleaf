@@ -218,7 +218,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description An appraisal with this key was already requested, so nothing changed and the rest of the body is ignored */
+            /** @description An appraisal with this key and body was already requested, so nothing changed */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -254,7 +254,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The request breaks a rule, which error names */
+            /** @description The request breaks a rule, which error names. key_reused means the key was already used for a different appraisal */
             422: {
                 headers: {
                     [name: string]: unknown;

@@ -1235,17 +1235,34 @@ def web.blank_name() -> String:
 def web.control_name() -> String:
   "{\"error\":\"invalid_name\",\"detail\":\"name must not hold control characters\"}"
 
+def web.reused() -> String:
+  "{\"error\":\"key_reused\",\"detail\":\"key was already used for an appraisal with a different address, zip, state or due date\"}"
+
+# A draft under key k1 with the given address.
+def web.drafted(address: String) -> String:
+  "{\"key\":\"k1\",\"address\":\"" ++ address ++ "\",\"zip\":\"78701\",\"state\":\"TX\",\"due\":\"2026-12-01\"}"
+
 def review_checks() -> List<&2, Check>:
   [Check{"a DC appraisal answers 201", web.answers(web.base(), web.post("/api/v1/appraisals", web.draft("k1", "20001", "DC")), "201 Created", "{\"id\":\"a1\",\"organization\":\"o1\",\"key\":\"k1\",\"address\":\"1 Main St\",\"zip\":\"20001\",\"state\":\"DC\",\"due\":\"2026-12-01\",\"status\":\"open\"}")},
    Check{"an organization name of only spaces answers 422", web.answers(web.base(), web.organize("   "), "422 Unprocessable Content", web.blank_name())},
    Check{"an organization name of only spaces writes nothing", Bool.not(web.writes(web.base(), web.organize("   ")))},
    Check{"an organization name holding a newline answers 422", web.answers(web.base(), web.organize("Acme\\nAppraisals"), "422 Unprocessable Content", web.control_name())},
    Check{"an organization name holding a tab writes nothing", Bool.not(web.writes(web.base(), web.organize("Acme\\tAppraisals")))},
+   Check{"an organization name holding U+0085 answers 422", web.answers(web.base(), web.organize("Acme\\u0085Appraisals"), "422 Unprocessable Content", web.control_name())},
+   Check{"an organization name holding U+009F answers 422", web.answers(web.base(), web.organize("Acme\\u009fAppraisals"), "422 Unprocessable Content", web.control_name())},
+   Check{"an organization name holding a no-break space is written", web.writes(web.base(), web.organize("Acme\\u00a0Appraisals"))},
    Check{"an organization name with spaces inside still answers 201", web.answers(web.base(), web.organize(" Cedar Hill "), "201 Created", "{\"id\":\"o3\",\"name\":\" Cedar Hill \",\"apiKey\":\"" ++ web.seeded() ++ "\"}")},
    Check{"a log line over 64KB counts as bad, and the next line still applies", web.wide.ok(web.wide())},
    Check{"a request short of its headers is read on", WA.Http.wants(web.ascii("GET / HTTP/1.1\r\n"), 16n)},
    Check{"a request is read no further once it reaches the byte cap", Bool.not(WA.Http.wants(web.ascii("GET / HTTP/1.1\r\n"), WA.Http.cap()))},
-   Check{"a whole request is read no further", Bool.not(WA.Http.wants(web.ascii("GET / HTTP/1.1\r\n\r\n"), 18n))}]
+   Check{"a whole request is read no further", Bool.not(WA.Http.wants(web.ascii("GET / HTTP/1.1\r\n\r\n"), 18n))},
+   Check{"a repeated key with a different zip answers 422 key_reused", web.answers(web.store([web.create("k1")]), web.post("/api/v1/appraisals", web.draft("k1", "10001", "TX")), "422 Unprocessable Content", web.reused())},
+   Check{"a repeated key with a different state answers 422 and writes nothing", Bool.and(web.answers(web.store([web.create("k1")]), web.post("/api/v1/appraisals", web.draft("k1", "78701", "OK")), "422 Unprocessable Content", web.reused()), Bool.not(web.writes(web.store([web.create("k1")]), web.post("/api/v1/appraisals", web.draft("k1", "78701", "OK")))))},
+   Check{"the same body again after a cancel answers 200 with the cancelled appraisal", web.answers(web.one_cancelled(), web.create("k1"), "200 OK", web.rec("a1", "k1", "cancelled"))},
+   Check{"an appraisal key of only spaces answers 422", web.answers(web.base(), web.post("/api/v1/appraisals", web.draft("   ", "78701", "TX")), "422 Unprocessable Content", "{\"error\":\"invalid_key\",\"detail\":\"key must not be blank\"}")},
+   Check{"an appraisal key holding a tab answers 422", web.answers(web.base(), web.post("/api/v1/appraisals", web.draft("k\\t1", "78701", "TX")), "422 Unprocessable Content", "{\"error\":\"invalid_key\",\"detail\":\"key must not hold control characters\"}")},
+   Check{"an address of only spaces answers 422", web.answers(web.base(), web.post("/api/v1/appraisals", web.drafted("  ")), "422 Unprocessable Content", "{\"error\":\"invalid_address\",\"detail\":\"address must not be blank\"}")},
+   Check{"an address holding a newline answers 422 and writes nothing", Bool.and(web.answers(web.base(), web.post("/api/v1/appraisals", web.drafted("1 Main St\\nApt 2")), "422 Unprocessable Content", "{\"error\":\"invalid_address\",\"detail\":\"address must not hold control characters\"}"), Bool.not(web.writes(web.base(), web.post("/api/v1/appraisals", web.drafted("1 Main St\\nApt 2")))))}]
 
 def show(c: Check) -> String:
   match c:

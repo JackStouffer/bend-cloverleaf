@@ -11,8 +11,10 @@ import ./utf8.bend as U
 # The data directory comes from CLOVERLEAF_DATA, /data by default. It holds
 # events.log, one change per line, never rewritten, and snapshot.jsonl, the
 # store after the log's first lines. The snapshot is rewritten at startup,
-# after the replay. Both are read and written a line at a time, so neither is
-# ever held whole. A snapshot cut off by a crash doesn't load, and then the
+# after the replay, first in full to the backup snapshot.prev.jsonl and then to
+# snapshot.jsonl. All are read and written a line at a time, so none is ever
+# held whole. A snapshot cut off by a crash doesn't load, and then the backup
+# is loaded, which is whole whenever the main one isn't. With neither, the
 # whole log is replayed.
 #
 # CLOVERLEAF_ADMIN_KEY, from the gitignored .env, is the key that adds dealer
@@ -274,49 +276,72 @@ def read_snapshot.opened(o: Result<&1, &1, U32 & String, File>) -> IO(St.Load):
 def read_snapshot(path: String) -> IO(St.Load):
   IO.bind(Result<&1, &1, U32 & String, File>, St.Load, File.open(path, "r"), read_snapshot.opened)
 
-# The snapshot, written a line at a time.
-def snap.next(w: Wrote(), next: File -> IO(Unit)) -> IO(Unit):
+# The snapshot, written a line at a time, and whether every line was written.
+def snap.next(w: Wrote(), next: File -> IO(Bool)) -> IO(Bool):
   (f, r) = w
   match r:
     case Done{u}:
       next(f)
     case Fail{e}:
-      do IO<Unit>:
+      do IO<Bool>:
         IO.print_err("cloverleaf web: the snapshot could not be written")
         File.close(f)
+        return False{}
 
-def snap.recs(fuel: Nat, f: File, rs: List<&2, St.Rec>) -> IO(Unit):
+def snap.close(f: File) -> IO(Bool):
+  do IO<Bool>:
+    File.close(f)
+    return True{}
+
+def snap.recs(fuel: Nat, f: File, rs: List<&2, St.Rec>) -> IO(Bool):
   match fuel rs:
     case 0n _:
-      File.close(f)
+      snap.close(f)
     case 1n+k Nil{}:
-      File.close(f)
+      snap.close(f)
     case 1n+k Con{r, rest}:
-      IO.bind(Wrote(), Unit, File.write(f, St.Rec.line(r)), w => snap.next(w, g => snap.recs(k, g, rest)))
+      IO.bind(Wrote(), Bool, File.write(f, St.Rec.line(r)), w => snap.next(w, g => snap.recs(k, g, rest)))
 
 # The organizations, then the records.
-def snap.orgs(fuel: Nat, f: File, gs: List<&2, St.Org>, +rs: List<&2, St.Rec>) -> IO(Unit):
+def snap.orgs(fuel: Nat, f: File, gs: List<&2, St.Org>, +rs: List<&2, St.Rec>) -> IO(Bool):
   match fuel gs:
     case 0n _:
       snap.recs(List.length(&2, St.Rec, rs), f, rs)
     case 1n+k Nil{}:
       snap.recs(List.length(&2, St.Rec, rs), f, rs)
     case 1n+k Con{g, rest}:
-      IO.bind(Wrote(), Unit, File.write(f, St.Org.line(g)), w => snap.next(w, h => snap.orgs(k, h, rest, rs)))
+      IO.bind(Wrote(), Bool, File.write(f, St.Org.line(g)), w => snap.next(w, h => snap.orgs(k, h, rest, rs)))
 
-def snapshot.opened(o: Result<&1, &1, U32 & String, File>, head: String, +gs: List<&2, St.Org>, rs: List<&2, St.Rec>) -> IO(Unit):
+def snapshot.opened(o: Result<&1, &1, U32 & String, File>, head: String, +gs: List<&2, St.Org>, rs: List<&2, St.Rec>) -> IO(Bool):
   match o:
     case Fail{e}:
-      IO.print_err("cloverleaf web: the snapshot could not be opened")
+      do IO<Bool>:
+        IO.print_err("cloverleaf web: the snapshot could not be opened")
+        return False{}
     case Done{f}:
-      IO.bind(Wrote(), Unit, File.write(f, head), w => snap.next(w, g => snap.orgs(List.length(&2, St.Org, gs), g, gs, rs)))
+      IO.bind(Wrote(), Bool, File.write(f, head), w => snap.next(w, g => snap.orgs(List.length(&2, St.Org, gs), g, gs, rs)))
 
-def snapshot.write(newer: Bool, path: String, n: Nat, +store: St.Store) -> IO(Unit):
+def snapshot.file(path: String, n: Nat, +store: St.Store) -> IO(Bool):
+  IO.bind(Result<&1, &1, U32 & String, File>, Bool, File.open(path, "w"), o => snapshot.opened(o, St.Snapshot.head(n, store), List.append(&2, St.Org, St.Store.orgs(store), St.Store.retired(store)), St.Store.recs(store)))
+
+# The main snapshot is written only once the backup is whole.
+def snapshot.then(ok: Bool, +dir: String, n: Nat, +store: St.Store) -> IO(Bool):
+  match ok:
+    case True{}:
+      snapshot.file(dir ++ "/snapshot.jsonl", n, store)
+    case False{}:
+      IO.pure(Bool, False{})
+
+# Base has no rename, so a snapshot can't replace the old one in one step. It
+# is written in full to snapshot.prev.jsonl first, then to snapshot.jsonl, so a
+# write cut short at any point leaves one of the two whole. True when both were
+# written, or when there was nothing newer to write.
+def snapshot.write(newer: Bool, +dir: String, +n: Nat, +store: St.Store) -> IO(Bool):
   match newer:
     case True{}:
-      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open(path, "w"), o => snapshot.opened(o, St.Snapshot.head(n, store), List.append(&2, St.Org, St.Store.orgs(store), St.Store.retired(store)), St.Store.recs(store)))
+      IO.bind(Bool, Bool, snapshot.file(dir ++ "/snapshot.prev.jsonl", n, store), ok => snapshot.then(ok, dir, n, store))
     case False{}:
-      IO.pure(Unit, Unit{})
+      IO.pure(Bool, True{})
 
 # The log handle, and whether its last line is still torn because the newline
 # could not be written.
@@ -355,12 +380,22 @@ def serving(m: File & Bool, store: St.Store, admin: Maybe<&2, String>) -> IO(Uni
 # A log shorter than the snapshot's count lost its tail, from a power cut, or it
 # was replaced or deleted. The snapshot is then rewritten with the log's real
 # line count, so the changes appended from now on are replayed after the next
-# restart and not skipped as if they were already in the snapshot.
+# restart and not skipped as if they were already in the snapshot. The
+# snapshot is then the only copy of the lost tail, and if it can't be
+# rewritten, serving would append changes the old count skips, so the process
+# stops instead.
 def short.warn(short: Bool) -> IO(Unit):
   match short:
     case True{}:
       IO.print_err("cloverleaf web: the event log has fewer lines than the snapshot counts, so the snapshot is rewritten with the log's count")
     case False{}:
+      IO.pure(Unit, Unit{})
+
+def short.stop(short: Bool, ok: Bool) -> IO(Unit):
+  match short ok:
+    case True{} False{}:
+      IO.die(Unit, 1, "cloverleaf web: the event log is shorter than the snapshot and the snapshot could not be rewritten, so the process stops rather than lose changes")
+    case _ _:
       IO.pure(Unit, Unit{})
 
 def mended(+dir: String, +skip: Nat, torn: Bool, +r: St.Replay, admin: Maybe<&2, String>) -> IO(Unit):
@@ -370,7 +405,8 @@ def mended(+dir: String, +skip: Nat, torn: Bool, +r: St.Replay, admin: Maybe<&2,
     log : File <- IO.try(File, File.open(dir ++ "/events.log", "a"))
     mended : File & Bool <- mend(torn, log)
     short.warn(Nat.is_lt(St.Replay.lines(r), skip))
-    snapshot.write(Bool.not(Nat.is_eq(skip, St.Replay.lines(r))), dir ++ "/snapshot.jsonl", St.Replay.lines(r), St.Replay.store(r))
+    wrote : Bool <- snapshot.write(Bool.not(Nat.is_eq(skip, St.Replay.lines(r))), dir, St.Replay.lines(r), St.Replay.store(r))
+    short.stop(Nat.is_lt(St.Replay.lines(r), skip), wrote)
     serving(mended, St.Replay.store(r), admin)
 
 def resumed(+dir: String, +skip: Nat, +r: St.Replay, admin: Maybe<&2, String>) -> IO(Unit):
@@ -388,10 +424,29 @@ def begin(+dir: String, m: Maybe<&2, St.Snap>, admin: Maybe<&2, String>) -> IO(U
     case Some{St.Snap{n, s}}:
       resume(dir, n, s, admin)
 
+def backup.begin(+dir: String, m: Maybe<&2, St.Snap>, admin: Maybe<&2, String>) -> IO(Unit):
+  match m:
+    case None{}:
+      begin(dir, None{}, admin)
+    case Some{s}:
+      do IO<Unit>:
+        IO.print_err("cloverleaf web: snapshot.jsonl didn't load, so the backup snapshot.prev.jsonl is used")
+        begin(dir, Some{s}, admin)
+
+# The main snapshot, or the backup when the main one is missing or cut short.
+def backup(+dir: String, m: Maybe<&2, St.Snap>, admin: Maybe<&2, String>) -> IO(Unit):
+  match m:
+    case None{}:
+      do IO<Unit>:
+        prev : St.Load <- read_snapshot(dir ++ "/snapshot.prev.jsonl")
+        backup.begin(dir, St.Load.finish(prev), admin)
+    case Some{s}:
+      begin(dir, Some{s}, admin)
+
 def start(+dir: String, admin: Maybe<&2, String>) -> IO(Unit):
   do IO<Unit>:
     snap : St.Load <- read_snapshot(dir ++ "/snapshot.jsonl")
-    begin(dir, St.Load.finish(snap), admin)
+    backup(dir, St.Load.finish(snap), admin)
 
 def data_dir(r: Result<&1, &1, U32 & String, String>) -> String:
   match r:

@@ -235,6 +235,8 @@ export async function run(base, ca, keep, admin = adminKey()) {
   if (first.json?.organization !== orgA.json?.id) problems.push("a new appraisal doesn't name its organization");
   const again = await call("POST", "/api/v1/appraisals", draft(`${run}-1`), 200, a);
   same("a repeated key answers the stored appraisal", again.json, first.json);
+  const reused = await call("POST", "/api/v1/appraisals", draft(`${run}-1`, { zip: "78702" }), 422, a);
+  if (reused.json?.error !== "key_reused") problems.push("a repeated key with a different body isn't key_reused");
   const second = await call("POST", "/api/v1/appraisals", draft(`${run}-2`, { address: "Café Ñandú, 3 Elm" }), 201, a);
   if (second.json?.id === first.json?.id) problems.push("two keys got one id");
 

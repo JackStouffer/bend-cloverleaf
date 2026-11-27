@@ -674,8 +674,10 @@ law replayed_request_changes_nothing:
 # Appraisal requests
 # ------------------
 
-# Sending a key that's already stored writes nothing and answers 200 with the
-# stored appraisal, so a dealer can retry a request safely.
+# Sending a key that's already stored writes nothing, whatever the body says.
+# When the body asks for the stored appraisal, the answer is 200 with it, so a
+# dealer can retry a request safely. Jack chose to refuse a different body
+# under a used key, on Nov 27, so the two answer laws hold for a matching body.
 law repeat_key_writes_nothing:
   for +d: WSt.Draft
   for +r: WSt.Rec
@@ -686,13 +688,59 @@ law repeat_key_answers_200:
   for +d: WSt.Draft
   for +r: WSt.Rec
   for +id: String
+  for +m: {WSt.Draft.matches(d, r) == True{} : Bool}
   {WA.Op.status(WA.Create{d, Some{r}, id}) == 200n : Nat}
 
 law repeat_key_answers_the_stored_appraisal:
   for +d: WSt.Draft
   for +r: WSt.Rec
   for +id: String
+  for +m: {WSt.Draft.matches(d, r) == True{} : Bool}
   {WA.Reply.body(WA.Route.answers(WA.Op.route(WA.Create{d, Some{r}, id})), WA.Api.run(WA.Create{d, Some{r}, id})) == WS.encode(WSt.Schemas.appraisal(), WSt.Rec.value(r)) : WJ.Json}
+
+# The body that made an appraisal matches it, whatever its status is now. So
+# resending that body answers 200 with the stored appraisal.
+law stored_request_matches_its_body:
+  for +d: WSt.Draft
+  for +i: String
+  for +s: T.Status
+  {WSt.Draft.matches(d, WSt.Rec.with(WSt.Rec.new(i, d), s)) == True{} : Bool}
+
+law resent_body_answers_200:
+  for +d: WSt.Draft
+  for +i: String
+  for +s: T.Status
+  for +id: String
+  {WA.Op.status(WA.Create{d, Some{WSt.Rec.with(WSt.Rec.new(i, d), s)}, id}) == 200n : Nat}
+
+# A used key with a body that asks for a different appraisal answers 422 and,
+# by repeat_key_writes_nothing, writes nothing.
+law repeat_key_with_a_new_body_answers_422:
+  for +d: WSt.Draft
+  for +r: WSt.Rec
+  for +id: String
+  for +m: {WSt.Draft.matches(d, r) == False{} : Bool}
+  {WA.Op.status(WA.Create{d, Some{r}, id}) == 422n : Nat}
+
+# The same in plain terms, for an address that differs from the stored one.
+law repeat_key_with_a_new_address_answers_422:
+  for +o: String
+  for +k: String
+  for +a: String
+  for +z: String
+  for +st: WSt.StateTag()
+  for +due: String
+  for +i: String
+  for +o2: String
+  for +k2: String
+  for +a2: String
+  for +z2: String
+  for +st2: WSt.StateTag()
+  for +d2: String
+  for +s: T.Status
+  for +id: String
+  for +e: {WJ.Text.same(a, a2) == False{} : Bool}
+  {WA.Op.status(WA.Create{WSt.Draft{o, k, a, z, st, due}, Some{WSt.Rec{i, o2, k2, a2, z2, st2, d2, s}}, id}) == 422n : Nat}
 
 # A request that breaks a rule writes nothing and answers 422.
 law broken_request_writes_nothing:
@@ -724,6 +772,51 @@ law good_request_answers_201:
   for +id: String
   for +p: {WSt.Draft.problem(d) == None{} : Maybe<&2, WSt.Problem>}
   {WA.Op.status(WA.Create{d, None{}, id}) == 201n : Nat}
+
+# A key or an address that is only spaces, or that holds a control character,
+# a code below 32 or from 127 to 159, is refused, whatever else the request
+# says.
+law blank_key_is_refused:
+  for +o: String
+  for +n: Nat
+  for +a: String
+  for +z: String
+  for +st: WSt.StateTag()
+  for +due: String
+  {Maybe.is_some(&2, WSt.Problem, WSt.Draft.problem(WSt.Draft{o, String.repeat(" ", n), a, z, st, due})) == True{} : Bool}
+
+law key_with_a_control_character_is_refused:
+  for +o: String
+  for +p: String
+  for +c: Char
+  for +q: String
+  for +a: String
+  for +z: String
+  for +st: WSt.StateTag()
+  for +due: String
+  for +e: {Bool.or(Nat.is_lt(U32.to_nat(Char.to_u32(c)), 32n), Bool.and(Nat.is_le(127n, U32.to_nat(Char.to_u32(c))), Nat.is_le(U32.to_nat(Char.to_u32(c)), 159n))) == True{} : Bool}
+  {Maybe.is_some(&2, WSt.Problem, WSt.Draft.problem(WSt.Draft{o, String.append(p, SCon{c, q}), a, z, st, due})) == True{} : Bool}
+
+law blank_address_is_refused:
+  for +o: String
+  for +k: String
+  for +n: Nat
+  for +z: String
+  for +st: WSt.StateTag()
+  for +due: String
+  {Maybe.is_some(&2, WSt.Problem, WSt.Draft.problem(WSt.Draft{o, k, String.repeat(" ", n), z, st, due})) == True{} : Bool}
+
+law address_with_a_control_character_is_refused:
+  for +o: String
+  for +k: String
+  for +p: String
+  for +c: Char
+  for +q: String
+  for +z: String
+  for +st: WSt.StateTag()
+  for +due: String
+  for +e: {Bool.or(Nat.is_lt(U32.to_nat(Char.to_u32(c)), 32n), Bool.and(Nat.is_le(127n, U32.to_nat(Char.to_u32(c))), Nat.is_le(U32.to_nat(Char.to_u32(c)), 159n))) == True{} : Bool}
+  {Maybe.is_some(&2, WSt.Problem, WSt.Draft.problem(WSt.Draft{o, k, String.append(p, SCon{c, q}), z, st, due})) == True{} : Bool}
 
 law new_appraisal_is_open:
   for +id: String
@@ -900,6 +993,19 @@ law bad_name_answers_422:
   for +t: String
   for +p: {WSt.Org.problem(n) == Some{WSt.Problem{c, t}} : Maybe<&2, WSt.Problem>}
   {WA.Op.status(WA.Organize{n, i, k, h}) == 422n : Nat}
+
+# A name that is only spaces, or that holds a control character, a code below
+# 32 or from 127 to 159, is refused.
+law blank_name_is_refused:
+  for +n: Nat
+  {Maybe.is_some(&2, WSt.Problem, WSt.Org.problem(String.repeat(" ", n))) == True{} : Bool}
+
+law name_with_a_control_character_is_refused:
+  for +p: String
+  for +c: Char
+  for +q: String
+  for +e: {Bool.or(Nat.is_lt(U32.to_nat(Char.to_u32(c)), 32n), Bool.and(Nat.is_le(127n, U32.to_nat(Char.to_u32(c))), Nat.is_le(U32.to_nat(Char.to_u32(c)), 159n))) == True{} : Bool}
+  {Maybe.is_some(&2, WSt.Problem, WSt.Org.problem(String.append(p, SCon{c, q}))) == True{} : Bool}
 
 # A good name is logged with the key's hash and never the key, and answers
 # 201 with the key, the one time it's shown.

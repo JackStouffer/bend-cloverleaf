@@ -207,6 +207,14 @@ def Rec.status(r: Rec) -> T.Status:
     case Rec{i, o, k, a, z, st, d, s}:
       s
 
+# Whether a draft asks for the appraisal r already is: the same address, zip,
+# state and due date. A repeated key finds r by its organization and key, so
+# those match already.
+def Draft.matches(d: Draft, r: Rec) -> Bool:
+  match d r:
+    case Draft{o, k, a, z, st, due} Rec{i, o2, k2, a2, z2, st2, d2, s}:
+      Bool.and(J.Text.same(a, a2), Bool.and(J.Text.same(z, z2), Bool.and(J.Text.same(S.Tag.name(Enums.states(), st), S.Tag.name(Enums.states(), st2)), J.Text.same(due, d2))))
+
 def Rec.new(id: String, d: Draft) -> Rec:
   match d:
     case Draft{o, k, a, z, st, due}:
@@ -348,11 +356,11 @@ def Text.between(+n: Nat, lo: Nat, hi: Nat) -> Bool:
 def Text.sized(s: String, lo: Nat, hi: Nat) -> Bool:
   Text.between(String.length(s), lo, hi)
 
-# s holds a control character: a code below 32, or 127.
+# s holds a control character, Unicode Cc: a code below 32, or 127 to 159.
 def Text.control(s: String) -> Bool:
   match s:
     case SCon{+c, t}:
-      Nat.is_lt(J.Text.code(c), 32n) || Nat.is_eq(J.Text.code(c), 127n) || Text.control(t)
+      Nat.is_lt(J.Text.code(c), 32n) || Text.between(J.Text.code(c), 127n, 159n) || Text.control(t)
     case SNil{}:
       False{}
 
@@ -387,19 +395,27 @@ def Draft.first(ok: Bool, code: String, detail: String, rest: Maybe<&2, Problem>
     case False{}:
       Some{Problem{code, detail}}
 
+# Whether s has something besides spaces.
+def Text.filled(s: String) -> Bool:
+  Nat.is_lt(0n, String.length(String.trim(s)))
+
 # The first rule the draft breaks, or None.
 def Draft.problem(d: Draft) -> Maybe<&2, Problem>:
   match d:
-    case Draft{o, k, a, z, st, due}:
+    case Draft{o, +k, +a, z, st, due}:
       Draft.first(Text.sized(k, 1n, 64n), "invalid_key", "key must be 1 to 64 characters",
+        Draft.first(Text.filled(k), "invalid_key", "key must not be blank",
+        Draft.first(Bool.not(Text.control(k)), "invalid_key", "key must not hold control characters",
         Draft.first(Text.sized(a, 1n, 200n), "invalid_address", "address must be 1 to 200 characters",
+        Draft.first(Text.filled(a), "invalid_address", "address must not be blank",
+        Draft.first(Bool.not(Text.control(a)), "invalid_address", "address must not hold control characters",
           Draft.first(Text.digits(5n, z), "invalid_zip", "zip must be 5 digits",
-            Draft.first(Date.ok(due), "invalid_due", "due must be a date, YYYY-MM-DD", None{}))))
+            Draft.first(Date.ok(due), "invalid_due", "due must be a date, YYYY-MM-DD", None{}))))))))
 
 # The first rule an organization's name breaks, or None.
 def Org.problem(+name: String) -> Maybe<&2, Problem>:
   Draft.first(Text.sized(name, 1n, 100n), "invalid_name", "name must be 1 to 100 characters",
-    Draft.first(Nat.is_lt(0n, String.length(String.trim(name))), "invalid_name", "name must not be blank",
+    Draft.first(Text.filled(name), "invalid_name", "name must not be blank",
       Draft.first(Bool.not(Text.control(name)), "invalid_name", "name must not hold control characters", None{})))
 
 # Events and the store

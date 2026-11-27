@@ -323,11 +323,23 @@ def Laws.replayed_request_changes_nothing(s, r, x, known):
 def Laws.repeat_key_writes_nothing(d, r, id):
   {==}
 
-def Laws.repeat_key_answers_200(d, r, id):
-  {==}
+def Laws.repeat_key_answers_200(d, r, id, m):
+  PSt.repeat_matching_answers_200(d, r, id, m)
 
-def Laws.repeat_key_answers_the_stored_appraisal(d, r, id):
-  {==}
+def Laws.repeat_key_answers_the_stored_appraisal(d, r, id, m):
+  PSt.repeat_matching_answers_the_record(d, r, id, m)
+
+def Laws.stored_request_matches_its_body(d, i, s):
+  PSt.matches_self(d, i, s)
+
+def Laws.resent_body_answers_200(d, i, s, id):
+  PSt.repeat_matching_answers_200(d, WSt.Rec.with(WSt.Rec.new(i, d), s), id, PSt.matches_self(d, i, s))
+
+def Laws.repeat_key_with_a_new_body_answers_422(d, r, id, m):
+  PSt.repeat_other_answers_422(d, r, id, m)
+
+def Laws.repeat_key_with_a_new_address_answers_422(o, k, a, z, st, due, i, o2, k2, a2, z2, st2, d2, s, id, e):
+  PSt.repeat_other_answers_422(WSt.Draft{o, k, a, z, st, due}, WSt.Rec{i, o2, k2, a2, z2, st2, d2, s}, id, PSt.address_differs(o, k, a, z, st, due, i, o2, k2, a2, z2, st2, d2, s, e))
 
 def Laws.broken_request_writes_nothing(d, id, c, t, p):
   PSt.broken_request_changes_nothing(d, id, c, t, p)
@@ -354,6 +366,18 @@ def Laws.writes_publish_not_saved(op, c, w):
 
 def Laws.good_request_is_logged_open(d, id, p):
   PSt.good_request_is_logged(d, id, p)
+
+def Laws.blank_key_is_refused(o, n, a, z, st, due):
+  PSt.blank_key(o, n, a, z, st, due)
+
+def Laws.key_with_a_control_character_is_refused(o, p, c, q, a, z, st, due, e):
+  PSt.control_key(o, p, c, q, a, z, st, due, e)
+
+def Laws.blank_address_is_refused(o, k, n, z, st, due):
+  PSt.blank_address(o, k, n, z, st, due)
+
+def Laws.address_with_a_control_character_is_refused(o, k, p, c, q, z, st, due, e):
+  PSt.control_address(o, k, p, c, q, z, st, due, e)
 
 def Laws.good_request_answers_201(d, id, p):
   PSt.good_request_is_created(d, id, p)
@@ -428,6 +452,12 @@ def Laws.bad_name_writes_nothing(n, i, k, h, c, t, p):
 
 def Laws.bad_name_answers_422(n, i, k, h, c, t, p):
   PA.bad_name_is_refused(n, i, k, h, c, t, p)
+
+def Laws.blank_name_is_refused(n):
+  PSt.blank_name(n)
+
+def Laws.name_with_a_control_character_is_refused(p, c, q, e):
+  PSt.control_name(p, c, q, e)
 
 def Laws.good_name_logs_only_the_hash(n, i, k, h, p):
   PA.good_name_is_logged(n, i, k, h, p)

@@ -65,7 +65,7 @@
             }
           },
           "200": {
-            "description": "An appraisal with this key was already requested, so nothing changed and the rest of the body is ignored",
+            "description": "An appraisal with this key and body was already requested, so nothing changed",
             "content": {
               "application/json": {
                 "schema": {
@@ -75,7 +75,7 @@
             }
           },
           "422": {
-            "description": "The request breaks a rule, which error names",
+            "description": "The request breaks a rule, which error names. key_reused means the key was already used for a different appraisal",
             "content": {
               "application/json": {
                 "schema": {
