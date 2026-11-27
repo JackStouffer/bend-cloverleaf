@@ -81,5 +81,6 @@ test("a keep file from before organizations is refused with a plain problem", ()
   assert.match(keptProblem([{ id: "a1" }]), /older contract run/);
   assert.match(keptProblem({ appraisals: [{ id: "a1" }] }), /older contract run/);
   assert.match(keptProblem(null), /older contract run/);
-  assert.equal(keptProblem({ key: "clv_a", other: "clv_b", appraisals: [{ id: "a1" }] }), undefined);
+  assert.match(keptProblem({ key: "clv_a", other: "clv_b", appraisals: [{ id: "a1" }] }), /older contract run/);
+  assert.equal(keptProblem({ key: "clv_a", other: "clv_b", revoked: ["clv_c"], appraisals: [{ id: "a1" }] }), undefined);
 });

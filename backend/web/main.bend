@@ -17,8 +17,8 @@ import ./utf8.bend as U
 #
 # CLOVERLEAF_ADMIN_KEY, from the gitignored .env, is the key that adds dealer
 # organizations. The process keeps only its hash. Without one, nobody is the
-# admin. A request to add an organization gets 32 bytes from /dev/urandom,
-# which its API key is made from. Other requests read none.
+# admin. A request to add an organization or rotate its key gets 32 bytes
+# from /dev/urandom, which the API key is made from. Other requests read none.
 
 def Job() -> Type:
   String & Chan(String)
@@ -306,7 +306,7 @@ def snapshot.opened(o: Result<&1, &1, U32 & String, File>, head: String, +gs: Li
 def snapshot.write(newer: Bool, path: String, n: Nat, +store: St.Store) -> IO(Unit):
   match newer:
     case True{}:
-      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open(path, "w"), o => snapshot.opened(o, St.Snapshot.head(n, store), St.Store.orgs(store), St.Store.recs(store)))
+      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open(path, "w"), o => snapshot.opened(o, St.Snapshot.head(n, store), List.append(&2, St.Org, St.Store.orgs(store), St.Store.retired(store)), St.Store.recs(store)))
     case False{}:
       IO.pure(Unit, Unit{})
 

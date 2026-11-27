@@ -999,3 +999,205 @@ law logged_request_is_the_callers:
   for +id: String
   for +d: WSt.Draft
   {WSt.Rec.org(WSt.Rec.new(id, d)) == WSt.Draft.org(d) : String}
+
+# Rotating and revoking keys
+# --------------------------
+
+# Only the admin gives an organization a new key or revokes its key.
+law rotating_needs_the_admin:
+  {WA.Route.auth(WA.Endpoint.route(WA.ERotate{})) == WA.Admins{} : WA.Auth}
+
+law revoking_needs_the_admin:
+  {WA.Route.auth(WA.Endpoint.route(WA.ERevoke{})) == WA.Admins{} : WA.Auth}
+
+# A new key for an id nobody has writes nothing and answers 404.
+law rotating_unknown_writes_nothing:
+  for +k: String
+  for +h: String
+  {WA.Api.change(WA.Rotate{None{}, k, h}) == None{} : Maybe<&2, WSt.Change>}
+
+law rotating_unknown_answers_404:
+  for +k: String
+  for +h: String
+  {WA.Op.status(WA.Rotate{None{}, k, h}) == 404n : Nat}
+
+# A new key is logged with its hash and never the key, under the
+# organization's own id and name, and answers 200 with the key, the one time
+# it's shown.
+law rotation_logs_only_the_hash:
+  for +i: String
+  for +n: String
+  for +x: String
+  for +k: String
+  for +h: String
+  {WA.Api.change(WA.Rotate{Some{WSt.Org{i, n, x}}, k, h}) == Some{WSt.Rekeyed{WSt.Org{i, n, h}}} : Maybe<&2, WSt.Change>}
+
+law rotation_answers_200:
+  for +i: String
+  for +n: String
+  for +x: String
+  for +k: String
+  for +h: String
+  {WA.Op.status(WA.Rotate{Some{WSt.Org{i, n, x}}, k, h}) == 200n : Nat}
+
+law rotation_answers_the_key:
+  for +i: String
+  for +n: String
+  for +x: String
+  for +k: String
+  for +h: String
+  {WA.Reply.body(WA.Route.answers(WA.Op.route(WA.Rotate{Some{WSt.Org{i, n, x}}, k, h})), WA.Api.run(WA.Rotate{Some{WSt.Org{i, n, x}}, k, h})) == WS.encode(WSt.Schemas.org.key(), (i, (n, (k, Unit{})))) : WJ.Json}
+
+# Revoking an active organization's key is logged, and answers 200 with the
+# organization, now revoked.
+law revoking_is_logged:
+  for +i: String
+  for +n: String
+  for +h: String
+  for +y: Maybe<&2, WSt.Org>
+  {WA.Api.change(WA.Revoke{Some{WSt.Org{i, n, h}}, y}) == Some{WSt.Revoked{i}} : Maybe<&2, WSt.Change>}
+
+law revoking_answers_200:
+  for +g: WSt.Org
+  for +y: Maybe<&2, WSt.Org>
+  {WA.Op.status(WA.Revoke{Some{g}, y}) == 200n : Nat}
+
+law revoking_answers_revoked:
+  for +i: String
+  for +n: String
+  for +h: String
+  for +y: Maybe<&2, WSt.Org>
+  {WA.Reply.body(WA.Route.answers(WA.Op.route(WA.Revoke{Some{WSt.Org{i, n, h}}, y})), WA.Api.run(WA.Revoke{Some{WSt.Org{i, n, h}}, y})) == WS.encode(WSt.Schemas.org(), (i, (n, (Fail{Done{Unit{}}}, Unit{})))) : WJ.Json}
+
+# Revoking a key that's already revoked, or that nobody has, writes nothing.
+# Revoking again answers 200, so a revoke can be retried safely, and an id
+# nobody has answers 404.
+law revoking_inactive_writes_nothing:
+  for +y: Maybe<&2, WSt.Org>
+  {WA.Api.change(WA.Revoke{None{}, y}) == None{} : Maybe<&2, WSt.Change>}
+
+law revoking_again_answers_200:
+  for +g: WSt.Org
+  {WA.Op.status(WA.Revoke{None{}, Some{g}}) == 200n : Nat}
+
+law revoking_unknown_answers_404:
+  {WA.Op.status(WA.Revoke{None{}, None{}}) == 404n : Nat}
+
+# A request carries the organization its path names.
+law rotation_finds_the_named_organization:
+  for +ps: List<&2, String>
+  for +body: String
+  for +s: WSt.Store
+  for +o: String
+  for +seed: List<&2, U32>
+  for +g: WSt.Org
+  for +k: String
+  for +h: String
+  for e: {WA.Api.resolve(WA.ERotate{}, ps, body, s, o, seed) == WA.Handle{WA.Rotate{Some{g}, k, h}} : WA.Resolved}
+  {WJ.Text.same(WA.Path.first(ps), WSt.Org.id(g)) == True{} : Bool}
+
+law revoking_finds_the_named_organization:
+  for +ps: List<&2, String>
+  for +body: String
+  for +s: WSt.Store
+  for +o: String
+  for +seed: List<&2, U32>
+  for +g: WSt.Org
+  for +y: Maybe<&2, WSt.Org>
+  for e: {WA.Api.resolve(WA.ERevoke{}, ps, body, s, o, seed) == WA.Handle{WA.Revoke{Some{g}, y}} : WA.Resolved}
+  {WJ.Text.same(WA.Path.first(ps), WSt.Org.id(g)) == True{} : Bool}
+
+# Once a stored organization, active or revoked, gets a new key, that key
+# signs in as the organization, unless it's the admin key.
+law rotated_key_signs_in:
+  for +s: WSt.Store
+  for +i: String
+  for +n: String
+  for +h: String
+  for +x: WSt.Org
+  for +e: {WSt.Store.org(i, s) == Some{x} : Maybe<&2, WSt.Org>}
+  {WA.Api.known(h, None{}, WSt.Store.orgs(WSt.Store.apply(s, WSt.Rekeyed{WSt.Org{i, n, h}}))) == WA.Dealer{i} : WA.Who}
+
+law rotated_key_signs_in_beside_the_admin:
+  for +s: WSt.Store
+  for +a: String
+  for +i: String
+  for +n: String
+  for +h: String
+  for +x: WSt.Org
+  for +e: {WSt.Store.org(i, s) == Some{x} : Maybe<&2, WSt.Org>}
+  for +ne: {WJ.Text.same(h, a) == False{} : Bool}
+  {WA.Api.known(h, Some{a}, WSt.Store.orgs(WSt.Store.apply(s, WSt.Rekeyed{WSt.Org{i, n, h}}))) == WA.Dealer{i} : WA.Who}
+
+# And any other key, the old one included, no longer signs in as it.
+law old_key_stops_working:
+  for +s: WSt.Store
+  for +i: String
+  for +n: String
+  for +h: String
+  for +k: String
+  for +admin: Maybe<&2, String>
+  for +x: WSt.Org
+  for +ex: {WSt.Store.org(i, s) == Some{x} : Maybe<&2, WSt.Org>}
+  for +ne: {WJ.Text.same(k, h) == False{} : Bool}
+  for e: {WA.Api.known(k, admin, WSt.Store.orgs(WSt.Store.apply(s, WSt.Rekeyed{WSt.Org{i, n, h}}))) == WA.Dealer{i} : WA.Who}
+  Empty
+
+# Once an organization's key is revoked, no key signs in as it.
+law revoked_key_signs_in_as_no_one:
+  for +s: WSt.Store
+  for +i: String
+  for +h: String
+  for +admin: Maybe<&2, String>
+  for e: {WA.Api.known(h, admin, WSt.Store.orgs(WSt.Store.apply(s, WSt.Revoked{i}))) == WA.Dealer{i} : WA.Who}
+  Empty
+
+# Rotating or revoking one organization's key leaves every other
+# organization's keys as they were.
+law rotation_keeps_other_keys:
+  for +s: WSt.Store
+  for +i: String
+  for +n: String
+  for +k: String
+  for +j: String
+  for +h: String
+  for +ne: {WJ.Text.same(j, i) == False{} : Bool}
+  {WSt.Orgs.holds(j, h, WSt.Store.orgs(WSt.Store.apply(s, WSt.Rekeyed{WSt.Org{i, n, k}}))) == WSt.Orgs.holds(j, h, WSt.Store.orgs(s)) : Bool}
+
+law revoking_keeps_other_keys:
+  for +s: WSt.Store
+  for +i: String
+  for +j: String
+  for +h: String
+  for +ne: {WJ.Text.same(j, i) == False{} : Bool}
+  {WSt.Orgs.holds(j, h, WSt.Store.orgs(WSt.Store.apply(s, WSt.Revoked{i}))) == WSt.Orgs.holds(j, h, WSt.Store.orgs(s)) : Bool}
+
+# Neither touches the appraisals, or the count that keeps organization ids
+# from being reused.
+law rotation_keeps_appraisals:
+  for +s: WSt.Store
+  for +g: WSt.Org
+  {WSt.Store.recs(WSt.Store.apply(s, WSt.Rekeyed{g})) == WSt.Store.recs(s) : List<&2, WSt.Rec>}
+
+law revoking_keeps_appraisals:
+  for +s: WSt.Store
+  for +i: String
+  {WSt.Store.recs(WSt.Store.apply(s, WSt.Revoked{i})) == WSt.Store.recs(s) : List<&2, WSt.Rec>}
+
+law rotation_keeps_ids_fresh:
+  for +s: WSt.Store
+  for +g: WSt.Org
+  {WSt.Store.made(WSt.Store.apply(s, WSt.Rekeyed{g})) == WSt.Store.made(s) : Nat}
+
+law revoking_keeps_ids_fresh:
+  for +s: WSt.Store
+  for +i: String
+  {WSt.Store.made(WSt.Store.apply(s, WSt.Revoked{i})) == WSt.Store.made(s) : Nat}
+
+# A revoked organization stays on record, so it can be given a new key.
+law revoked_organization_stays_on_record:
+  for +s: WSt.Store
+  for +i: String
+  for +g: WSt.Org
+  for +e: {WSt.Orgs.find(i, WSt.Store.orgs(s)) == Some{g} : Maybe<&2, WSt.Org>}
+  {WSt.Store.org(i, WSt.Store.apply(s, WSt.Revoked{i})) == Some{g} : Maybe<&2, WSt.Org>}

@@ -169,7 +169,7 @@ Compose runs the app the way a real deployment would, so nothing talks to the ba
 - **Development:** `docker compose -f compose.yaml -f compose.dev.yaml watch` keeps the same nginx and TLS path, swaps in Vite, and rebuilds the backend on change.
 - **Images:** `backend/Dockerfile` builds from the repo root into three images, `web`, `road` and `solver`, and fails if `bend PROOF.bend`, the Bend checks or the scenarios fail. All three have built and run on Docker Desktop, and the national solve ran in the `solver` image under its 2GB cap. `web` and `nginx` have run together under Compose in a Linux sandbox, where the contract and crash tests passed through nginx. The `road` image wasn't built there, because it needs the 30GB data rebuild.
 - **Certificates:** nginx creates a self-signed certificate in a Docker volume on first start. No key is ever committed.
-- **Secrets:** come from a gitignored `.env` file, never from the images or Compose files. The first is `CLOVERLEAF_ADMIN_KEY`, which Compose passes to the web process.
+- **Secrets:** come from a gitignored `.env` file, never from the images or Compose files. The first is `CLOVERLEAF_ADMIN_KEY`, which Compose passes to the web process, alone.
 - **Backend protection:** nginx buffers requests and limits body size, so slow or oversized clients never reach Bend's event loop. Server-Sent Events will need a route with buffering turned off.
 - **Road data:** part of the `road` image, at `/road/<state>`. A plain `docker build` fetches the US extract and rebuilds the data from scratch, as a deployed image should. Local Compose runs set `ROAD_DATA=local` and copy the cached, gitignored `data/road` instead, which takes about 30 seconds instead of half an hour. The image is about 10GB.
 
@@ -307,6 +307,10 @@ Healing is proven by construction: every edit rebuilds the route through `Route.
 - A dealer route lets a caller through only as the dealer organization whose stored hash matches its key, an admin route only the admin, and a request with no key is a 401. With no admin key set, no key is the admin's.
 - A dealer's reads, cancels and repeated keys find only that dealer's own appraisals, and a new request is logged as the caller's.
 - Adding an organization with a bad name writes nothing and answers 422. A good name logs the key's hash, never the key, and answers 201 with the key, and that hash signs in as the new organization.
+- Only the admin rotates or revokes a key. A rotation logs only the new key's hash, under the organization's own id and name, and answers 200 with the key. Once it's applied the new key signs in as the organization, unless it's the admin key, and no other key does, the old one included.
+- Once a key is revoked, no key signs in as its organization. Revoking again, or revoking an id nobody has, writes nothing, and answers 200 or 404.
+- Rotating or revoking one organization's key leaves every other organization's keys, all appraisals and the id count as they were. A revoked organization stays on record, so it can get a new key.
+- A rotation or a revoke carries the organization its path names.
 
 Still to prove:
 
@@ -364,7 +368,7 @@ Synthetic data generator, one nightly multi-day solve per state, contractor assi
 HTTP/1.1, JSON, the route table and schema-driven codecs, the OpenAPI generator, event log and snapshots, password and API-key auth, the external API, organizations and roles, and process wiring. Also adds the generated client and contract tests to the existing frontend project, so the contract is proven end to end before the UI is built.
 
 **Done when:** simulated dealer clients can create, read and cancel requests using the generated spec, real responses pass contract tests, a breaking API change fails `tsc`, data survives a crash, and tenant isolation is proven.
-**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. Dealers can create, read and cancel appraisals, with request bodies, path parameters and enums, on an append-only event log with snapshots. Contract tests check real responses through nginx against the spec, and the data survives the web process being killed. Dealer organizations have API keys, an admin key adds them, and tenant isolation is proven for every dealer request. Still to come: query parameters, password auth and sessions for people, roles, revoking and rotating organization keys, the external API, and serving `openapi.json`.
+**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. Dealers can create, read and cancel appraisals, with request bodies, path parameters and enums, on an append-only event log with snapshots. Contract tests check real responses through nginx against the spec, and the data survives the web process being killed. Dealer organizations have API keys, an admin key adds them, and tenant isolation is proven for every dealer request. The admin can rotate an organization's key and revoke it. Still to come: query parameters, listing organizations, password auth and sessions for people, roles, the external API, and serving `openapi.json`.
 
 ### 5. Geocoding (M)
 
@@ -530,6 +534,45 @@ Some injected bugs were caught because a proof script stopped matching the code,
 
 - **Parallel reads:** an array has one owner, so lanes can't share a read-only graph without `@unsafe`. Copying it is the largest memory cost in the road search.
 
+### Milestone 4 key rotation and revocation
+
+**What was built**
+
+- `POST /api/v1/organizations/{id}/key`, which takes the admin key and answers `OrganizationKey` with a new key, shown once. The old key stops working. Rotating a revoked organization makes it active again, and an id nobody has is a 404.
+- `POST /api/v1/organizations/{id}/revoke`, which takes the admin key and answers the new `Organization` schema, with `status` `revoked` from the `OrganizationStatus` enum. The organization's appraisals stay. Revoking again answers 200 and writes nothing.
+- `web/store.bend`: `rekeyed` and `revoked` changes in the log. The store keeps revoked organizations in their own list, `retired`, which no key is looked up in, so a revoked key can't match by any route. Ids still aren't reused. The snapshot head counts revoked organizations, and their lines follow the active ones.
+- `scripts/contract.mjs`: a third organization each run is rotated, revoked and rotated back, then revoked again. The crash test checks that its three keys are still refused after the web process is killed.
+- Review fixes: when `/dev/urandom` can't be read, an id nobody has still answers 404 and a name that breaks a rule still answers 422, where both were a 500 before. Compose passes the web process only `CLOVERLEAF_ADMIN_KEY` from `.env`, not every line in it, and the README's setup line no longer overwrites `.env`.
+
+Old log lines read the same, since both new fields are optional. An old snapshot's head lacks the `revoked` count, so it doesn't load and the whole log replays once, then a new snapshot is written. Nothing has to be cleared when upgrading.
+
+This answers the earlier gap in part. A lost answer to a rotation is fixed by rotating again. A lost answer to `POST /api/v1/organizations` still leaves a key nobody holds, and the admin can't learn the new id without a way to list organizations, which is still to come. Revoking keeps the organization, so a key that may have leaked can be stopped at once, and a new one issued when it's needed.
+
+**Proof effort**
+
+| Measure | Result |
+|---|---|
+| Laws | 26 new, in 202 lines. No existing law changed |
+| Web code | 4,534 lines, of which 4,137 are pure |
+| Proofs | 550 lines and 35 defs in the new `proof/keys.bend`, 2 lines changed and 2 cases added in `proof/store.bend`, and 2 cases added to each of 4 per-route proofs in `PROOF.bend` |
+| Checking everything | about 6.5s |
+| Scenarios | 26 new, 236 in all |
+| `@unsafe` or foreign code | None new |
+| `--verdict` | Not run: Lean isn't installed in this environment |
+
+The handler laws are `{==}`. The store laws needed five short inductions over the organization list: dropping an id leaves no key for it, finds nothing under it, and keeps every other id's keys, and finding an id gives an organization with that id. The last two need `Text.same` to be transitive, which isn't in Base: two texts that match a third match each other. Equal character codes can't be turned into equal characters in a proof, so it goes through `Nat.is_eq` instead, an eight-case match on three strings. Every other new proof checked on its first run.
+
+**Bugs**
+
+Proofs caught none in the code as written. Choosing how to mark a revoked key was a design catch: a sentinel hash in the organization would have contradicted the existing law `new_key_signs_in` for a key whose hash was the sentinel, so revoked organizations moved to their own list, and that law didn't change.
+
+**Friction**
+
+- **Checker stack, again:** a law saying the hash a rotation logs is the hash of the key it answers overflows the checker's stack, even once every other step avoids unfolding `Sha.text`. The goal itself names `Sha.text` of an unknown key. That law was dropped. Scenarios check that a rotation's logged hash matches its key.
+- **Long list literals:** adding 24 checks to the 124 web scenarios made one list literal the compiler refuses, with "an arity over 247" and no location. The new checks are in a list of their own.
+- **Wide records:** the fifth `Store` field and eighth `Load` field meant touching every match on them again, in code, a proof and the scenarios.
+- **Good:** the two new routes, their security, their 401, 403 and 404 and their schemas in the spec all came from two route table entries.
+
 ### Milestone 4 organizations and API keys
 
 **What was built**
@@ -539,12 +582,12 @@ Some injected bugs were caught because a proof script stopped matching the code,
 - `web/api.bend`: each route has an auth rule, `Open`, `Dealers` or `Admins`. The gate runs before the body is read. No key, or one nobody has, is a 401 with `WWW-Authenticate: Bearer`, and a key for the other kind of route is a 403. Lookups take the caller's organization, so another dealer's appraisal reads as 404, and idempotency keys are per organization. A key is `clv_` and 64 hex digits from 32 bytes of `/dev/urandom`.
 - `web/store.bend`: an `organized` change in the log, organizations in the store and the snapshot, ahead of the appraisals.
 - `web/openapi.bend`: `dealerKey` and `adminKey` Bearer schemes, each operation's `security`, and its 401 and 403.
-- `web/main.bend`: reads `CLOVERLEAF_ADMIN_KEY` at startup and keeps only its hash. A key that isn't at least 32 printable ASCII characters with no spaces sets no admin, and the process says so on stderr. Only a request to add an organization reads `/dev/urandom`.
+- `web/main.bend`: reads `CLOVERLEAF_ADMIN_KEY` at startup and keeps only its hash. A key that isn't at least 32 printable ASCII characters with no spaces sets no admin, and the process says so on stderr. Only a request to add an organization or rotate its key reads `/dev/urandom`. It reads it before the caller is checked, which costs less than hashing the caller's key.
 - `scripts/contract.mjs`: adds two organizations each run and checks the gate and that neither sees the other's appraisals. `scripts/sha256.test.mjs` checks the hash against Node's.
 
 The log and snapshot formats changed. A store from before this slice loads as empty: its old lines don't decode and are skipped, its appraisals are dropped, and ids start again at `a1`. There was no deployed data, and the README says to clear the appraisals volume when upgrading.
 
-A lost answer to `POST /api/v1/organizations` leaves a key nobody holds. The change is logged before the 201 is sent, so a retry adds a second organization, and the first key still works. Only a key's hash is stored, so a retry can't send it again. The fix is revoking and rotating keys, which is still to come.
+A lost answer to `POST /api/v1/organizations` leaves a key nobody holds. The change is logged before the 201 is sent, so a retry adds a second organization, and the first key still works. Only a key's hash is stored, so a retry can't send it again. Rotating and revoking keys, added after this slice, fix part of this.
 
 **Proof effort**
 

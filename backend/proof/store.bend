@@ -55,7 +55,7 @@ law put_finds:
 
 def put_finds(r, s):
   match s:
-    case St.Store{n, rs, m, gs}:
+    case St.Store{n, rs, m, gs, rt}:
       %Equal.sym(Bool, J.Text.same(St.Rec.id(r), St.Rec.id(r)), True{}, PW.same_refl(St.Rec.id(r))) : {St.Store.find.pick(_, r, St.Store.find(St.Rec.id(r), rs)) == Some{r} : MS()}
       {==}
 
@@ -141,6 +141,15 @@ def change_back(e):
       %Equal.sym(EV(), S.decode(St.Schemas.event(), S.encode(St.Schemas.event(), St.Change.value(St.Organized{g}))), Some{St.Change.value(St.Organized{g})},
         PW.roundtrip(St.Schemas.event(), St.Change.value(St.Organized{g}), {==}, PW.within_free(St.Schemas.event(), St.Change.value(St.Organized{g}), {==}))) : {St.Change.found(_) == Some{St.Organized{g}} : MC()}
       %Equal.sym(St.Org, St.Org.of(St.Org.value(g)), g, org_back(g)) : {Some{St.Organized{_}} == Some{St.Organized{g}} : MC()}
+      {==}
+    case St.Rekeyed{g}:
+      %Equal.sym(EV(), S.decode(St.Schemas.event(), S.encode(St.Schemas.event(), St.Change.value(St.Rekeyed{g}))), Some{St.Change.value(St.Rekeyed{g})},
+        PW.roundtrip(St.Schemas.event(), St.Change.value(St.Rekeyed{g}), {==}, PW.within_free(St.Schemas.event(), St.Change.value(St.Rekeyed{g}), {==}))) : {St.Change.found(_) == Some{St.Rekeyed{g}} : MC()}
+      %Equal.sym(St.Org, St.Org.of(St.Org.value(g)), g, org_back(g)) : {Some{St.Rekeyed{_}} == Some{St.Rekeyed{g}} : MC()}
+      {==}
+    case St.Revoked{i}:
+      %Equal.sym(EV(), S.decode(St.Schemas.event(), S.encode(St.Schemas.event(), St.Change.value(St.Revoked{i}))), Some{St.Change.value(St.Revoked{i})},
+        PW.roundtrip(St.Schemas.event(), St.Change.value(St.Revoked{i}), {==}, PW.within_free(St.Schemas.event(), St.Change.value(St.Revoked{i}), {==}))) : {St.Change.found(_) == Some{St.Revoked{i}} : MC()}
       {==}
 
 # Handlers

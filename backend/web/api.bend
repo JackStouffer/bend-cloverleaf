@@ -341,6 +341,8 @@ type Endpoint is Data:
   EFetch{}
   ECancel{}
   EOrganize{}
+  ERotate{}
+  ERevoke{}
 
 def Endpoint.route(e: Endpoint) -> Route:
   match e:
@@ -365,6 +367,14 @@ def Endpoint.route(e: Endpoint) -> Route:
       Route{Post{}, "/api/v1/organizations", "createOrganization", "Add a dealer organization and issue its API key, which is shown only in this answer", Some{St.Schemas.org.draft()}, True{}, Admins{},
         [Answer{Created{}, "The organization was added. Keep apiKey: it can't be read again", St.Schemas.org.key()},
          Answer{Unprocessable{}, "The name breaks a rule, which error names", Schemas.error()}]}
+    case ERotate{}:
+      Route{Post{}, "/api/v1/organizations/{id}/key", "rotateOrganizationKey", "Issue an organization a new API key, which is shown only in this answer. Its old key stops working, and a revoked organization is active again", None{}, True{}, Admins{},
+        [Answer{OK{}, "The organization's new key. Keep apiKey: it can't be read again", St.Schemas.org.key()},
+         Answer{NotFound{}, "No organization has this id", Schemas.error()}]}
+    case ERevoke{}:
+      Route{Post{}, "/api/v1/organizations/{id}/revoke", "revokeOrganizationKey", "Revoke an organization's API key, so it stops working. Its appraisals stay. Revoking again changes nothing", None{}, True{}, Admins{},
+        [Answer{OK{}, "The organization, now revoked", St.Schemas.org()},
+         Answer{NotFound{}, "No organization has this id", Schemas.error()}]}
 
 # A request with what the handler needs from the store already looked up, so
 # the handlers stay pure and the laws cover every store they could meet.
@@ -372,13 +382,18 @@ def Endpoint.route(e: Endpoint) -> Route:
 # and the id a new record would get. The draft names the caller's
 # organization, and known, like Fetch's and Cancel's found, is only ever one
 # of that organization's records. Organize carries the new organization's
-# name, its id, its new API key and that key's hash.
+# name, its id, its new API key and that key's hash. Rotate carries the
+# organization named in the path, active or revoked, if any, with a new key
+# and its hash. Revoke carries the organization named in the path, once as
+# found among the active ones and once among the revoked ones.
 type Op is Data:
   Health{}
   Create{draft: St.Draft, known: Maybe<&2, St.Rec>, id: String}
   Fetch{found: Maybe<&2, St.Rec>}
   Cancel{found: Maybe<&2, St.Rec>}
   Organize{name: String, id: String, key: String, hash: String}
+  Rotate{found: Maybe<&2, St.Org>, key: String, hash: String}
+  Revoke{live: Maybe<&2, St.Org>, gone: Maybe<&2, St.Org>}
 
 def Op.endpoint(op: Op) -> Endpoint:
   match op:
@@ -392,12 +407,16 @@ def Op.endpoint(op: Op) -> Endpoint:
       ECancel{}
     case Organize{n, i, k, h}:
       EOrganize{}
+    case Rotate{f, k, h}:
+      ERotate{}
+    case Revoke{l, g}:
+      ERevoke{}
 
 def Op.route(op: Op) -> Route:
   Endpoint.route(Op.endpoint(op))
 
 def Api.ops() -> List<&2, Endpoint>:
-  [EHealth{}, ECreate{}, EFetch{}, ECancel{}, EOrganize{}]
+  [EHealth{}, ECreate{}, EFetch{}, ECancel{}, EOrganize{}, ERotate{}, ERevoke{}]
 
 def Api.routes(ops: List<&2, Endpoint>) -> List<&2, Route>:
   match ops:
@@ -423,6 +442,12 @@ def CancelReply() -> Data:
 
 def OrganizeReply() -> Data:
   Reply(Route.answers(Endpoint.route(EOrganize{})))
+
+def RotateReply() -> Data:
+  Reply(Route.answers(Endpoint.route(ERotate{})))
+
+def RevokeReply() -> Data:
+  Reply(Route.answers(Endpoint.route(ERevoke{})))
 
 def Create.fresh(p: Maybe<&2, St.Problem>, d: St.Draft, id: String) -> CreateReply():
   match p:
@@ -473,6 +498,27 @@ def Organize.reply(p: Maybe<&2, St.Problem>, name: String, id: String, key: Stri
     case Some{St.Problem{code, detail}}:
       Fail{Done{Api.fail(code, detail)}}
 
+def Rotate.reply(found: Maybe<&2, St.Org>, key: String) -> RotateReply():
+  match found:
+    case Some{St.Org{i, n, h}}:
+      Done{(i, (n, (key, Unit{})))}
+    case None{}:
+      Fail{Done{Api.fail("not_found", "No organization has this id")}}
+
+def Revoke.gone(gone: Maybe<&2, St.Org>) -> RevokeReply():
+  match gone:
+    case Some{g}:
+      Done{St.Org.view(False{}, g)}
+    case None{}:
+      Fail{Done{Api.fail("not_found", "No organization has this id")}}
+
+def Revoke.reply(live: Maybe<&2, St.Org>, gone: Maybe<&2, St.Org>) -> RevokeReply():
+  match live:
+    case Some{g}:
+      Done{St.Org.view(False{}, g)}
+    case None{}:
+      Revoke.gone(gone)
+
 # The handlers. Each one's type comes from its route, so a reply the route
 # doesn't declare is a type error.
 def Api.run(op: Op) -> Reply(Route.answers(Op.route(op))):
@@ -487,6 +533,10 @@ def Api.run(op: Op) -> Reply(Route.answers(Op.route(op))):
       Cancel.reply(found)
     case Organize{+name, id, key, hash}:
       Organize.reply(St.Org.problem(name), name, id, key)
+    case Rotate{found, key, hash}:
+      Rotate.reply(found, key)
+    case Revoke{live, gone}:
+      Revoke.reply(live, gone)
 
 # The status code a handler answers with.
 def Op.status(+op: Op) -> Nat:
@@ -530,6 +580,24 @@ def Organize.made(p: Maybe<&2, St.Problem>, name: String, id: String, hash: Stri
     case Some{x}:
       None{}
 
+# The log keeps the new key's hash, never the key, under the organization's
+# own id and name.
+def Rotate.change(found: Maybe<&2, St.Org>, hash: String) -> Maybe<&2, St.Change>:
+  match found:
+    case Some{St.Org{i, n, h}}:
+      Some{St.Rekeyed{St.Org{i, n, hash}}}
+    case None{}:
+      None{}
+
+# Only an active organization has a key to revoke, so revoking again logs
+# nothing.
+def Revoke.change(live: Maybe<&2, St.Org>) -> Maybe<&2, St.Change>:
+  match live:
+    case Some{g}:
+      Some{St.Revoked{St.Org.id(g)}}
+    case None{}:
+      None{}
+
 def Api.change(op: Op) -> Maybe<&2, St.Change>:
   match op:
     case Create{d, known, id}:
@@ -538,6 +606,10 @@ def Api.change(op: Op) -> Maybe<&2, St.Change>:
       Cancel.change(found)
     case Organize{+name, id, key, hash}:
       Organize.made(St.Org.problem(name), name, id, hash)
+    case Rotate{found, key, hash}:
+      Rotate.change(found, hash)
+    case Revoke{live, gone}:
+      Revoke.change(live)
     case other:
       None{}
 
@@ -1119,12 +1191,40 @@ def Api.organize.key(key: Maybe<&2, String>, name: String, id: String) -> Resolv
     case Some{+k}:
       Handle{Organize{name, id, k, H.Sha.text(k)}}
 
+# A name that breaks a rule is answered without a key, so it's a 422 even when
+# the random bytes couldn't be read.
+def Api.organize.named(p: Maybe<&2, St.Problem>, key: Maybe<&2, String>, name: String, id: String) -> Resolved:
+  match p:
+    case None{}:
+      Api.organize.key(key, name, id)
+    case Some{x}:
+      Handle{Organize{name, id, "", ""}}
+
 def Api.organize(m: Maybe<&2, String>, +seed: List<&2, U32>, store: St.Store) -> Resolved:
   match m:
     case None{}:
       Refuse{BadRequest{}, "invalid_body"}
-    case Some{n}:
-      Api.organize.key(Key.of(seed), n, St.Store.next.org(store))
+    case Some{+n}:
+      Api.organize.named(St.Org.problem(n), Key.of(seed), n, St.Store.next.org(store))
+
+def Api.rotate.key(key: Maybe<&2, String>, g: St.Org) -> Resolved:
+  match key:
+    case None{}:
+      Refuse{ServerError{}, "no_entropy"}
+    case Some{+k}:
+      Handle{Rotate{Some{g}, k, H.Sha.text(k)}}
+
+# An id nobody has is answered without a key, so it's a 404 even when the
+# random bytes couldn't be read.
+def Api.rotate(key: Maybe<&2, String>, found: Maybe<&2, St.Org>) -> Resolved:
+  match found:
+    case None{}:
+      Handle{Rotate{None{}, "", ""}}
+    case Some{g}:
+      Api.rotate.key(key, g)
+
+def Api.revoke(+i: String, +store: St.Store) -> Resolved:
+  Handle{Revoke{St.Orgs.find(i, St.Store.orgs(store)), St.Orgs.find(i, St.Store.retired(store))}}
 
 # Looks up what the handler needs from the store, for the caller's
 # organization org. A dealer's lookups only ever find that dealer's records.
@@ -1140,6 +1240,10 @@ def Api.resolve(ep: Endpoint, params: List<&2, String>, body: String, +store: St
       Handle{Cancel{St.Store.owned(org, Path.first(params), St.Store.recs(store))}}
     case EOrganize{}:
       Api.organize(Api.name(body), seed, store)
+    case ERotate{}:
+      Api.rotate(Key.of(seed), St.Store.org(Path.first(params), store))
+    case ERevoke{}:
+      Api.revoke(Path.first(params), store)
 
 # The response, and the change the log has to record before it's sent.
 type Handled is Data:
@@ -1185,11 +1289,14 @@ def Api.dispatch(line: Maybe<&2, Line>, body: String, +store: St.Store, token: M
 def Api.handled(+text: String, +store: St.Store, admin: Maybe<&2, String>, seed: List<&2, U32>) -> Handled:
   Api.dispatch(Http.line(text), Http.payload(text), store, Http.token(String.lines(Http.head(text))), admin, seed)
 
-# Whether a request asks to add an organization, the one handler that uses the
-# random bytes, so the web process reads /dev/urandom only for those.
+# Whether a request asks to add an organization or give one a new key, the
+# handlers that use the random bytes, so the web process reads /dev/urandom
+# only for those.
 def Api.seeds.hit(hit: Maybe<&2, Hit>) -> Bool:
   match hit:
     case Some{Hit{EOrganize{}, ps}}:
+      True{}
+    case Some{Hit{ERotate{}, ps}}:
       True{}
     case other:
       False{}
