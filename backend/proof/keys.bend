@@ -293,6 +293,22 @@ def revoked(x: A.Resolved) -> MO():
     case other:
       None{}
 
+law rotate_found.key:
+  for +key: Maybe<&2, String>
+  for +q: St.Org
+  for +g: St.Org
+  for +k: String
+  for +h: String
+  for e: {A.Api.rotate(key, Some{q}) == A.Handle{A.Rotate{Some{g}, k, h}} : A.Resolved}
+  {Some{q} == Some{g} : MO()}
+
+def rotate_found.key(key, q, g, k, h, e):
+  match key:
+    case None{}:
+      L.never({Some{q} == Some{g} : MO()}, Equal.cong(A.Resolved, Bool, x => PA.is_handle(x), A.Refuse{A.ServerError{}, "no_entropy"}, A.Handle{A.Rotate{Some{g}, k, h}}, e))
+    case Some{p}:
+      Equal.cong(A.Resolved, MO(), x => rotated(x), A.Api.rotate(Some{p}, Some{q}), A.Handle{A.Rotate{Some{g}, k, h}}, e)
+
 law rotate_found:
   for +key: Maybe<&2, String>
   for +f: MO()
@@ -303,11 +319,11 @@ law rotate_found:
   {f == Some{g} : MO()}
 
 def rotate_found(key, f, g, k, h, e):
-  match key:
+  match f:
     case None{}:
-      L.never({f == Some{g} : MO()}, Equal.cong(A.Resolved, Bool, x => PA.is_handle(x), A.Refuse{A.ServerError{}, "no_entropy"}, A.Handle{A.Rotate{Some{g}, k, h}}, e))
+      Equal.cong(A.Resolved, MO(), x => rotated(x), A.Api.rotate(key, None{}), A.Handle{A.Rotate{Some{g}, k, h}}, e)
     case Some{q}:
-      Equal.cong(A.Resolved, MO(), x => rotated(x), A.Api.rotate(Some{q}, f), A.Handle{A.Rotate{Some{g}, k, h}}, e)
+      rotate_found.key(key, q, g, k, h, e)
 
 law rotate_found_is_named:
   for +ps: List<&2, String>

@@ -62,10 +62,10 @@ Then open https://localhost:8443. The certificate is self-signed, so your browse
 
 The appraisal routes take a dealer organization's API key, and adding an organization takes the admin key. Both go in an `Authorization: Bearer` header. The web process keeps only each key's SHA-256 hash.
 
-Set the admin key in a `.env` file at the repo root, which git ignores. Use at least 32 printable ASCII characters with no spaces, for example:
+Set the admin key in a `.env` file at the repo root, which git ignores. Use at least 32 printable ASCII characters with no spaces. This adds one only when `.env` has none, and keeps anything else in the file:
 
 ```bash
-echo "CLOVERLEAF_ADMIN_KEY=$(openssl rand -hex 32)" > .env
+grep -qs '^CLOVERLEAF_ADMIN_KEY=' .env || echo "CLOVERLEAF_ADMIN_KEY=$(openssl rand -hex 32)" >> .env
 ```
 
 Start the stack, or restart it if it was already up, so the web process reads the key. Then load the key into your shell, copy out the stack's certificate, and add an organization. The answer shows its key once, so save it:

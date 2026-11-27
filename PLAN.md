@@ -169,7 +169,7 @@ Compose runs the app the way a real deployment would, so nothing talks to the ba
 - **Development:** `docker compose -f compose.yaml -f compose.dev.yaml watch` keeps the same nginx and TLS path, swaps in Vite, and rebuilds the backend on change.
 - **Images:** `backend/Dockerfile` builds from the repo root into three images, `web`, `road` and `solver`, and fails if `bend PROOF.bend`, the Bend checks or the scenarios fail. All three have built and run on Docker Desktop, and the national solve ran in the `solver` image under its 2GB cap. `web` and `nginx` have run together under Compose in a Linux sandbox, where the contract and crash tests passed through nginx. The `road` image wasn't built there, because it needs the 30GB data rebuild.
 - **Certificates:** nginx creates a self-signed certificate in a Docker volume on first start. No key is ever committed.
-- **Secrets:** come from a gitignored `.env` file, never from the images or Compose files. The first is `CLOVERLEAF_ADMIN_KEY`, which Compose passes to the web process.
+- **Secrets:** come from a gitignored `.env` file, never from the images or Compose files. The first is `CLOVERLEAF_ADMIN_KEY`, which Compose passes to the web process, alone.
 - **Backend protection:** nginx buffers requests and limits body size, so slow or oversized clients never reach Bend's event loop. Server-Sent Events will need a route with buffering turned off.
 - **Road data:** part of the `road` image, at `/road/<state>`. A plain `docker build` fetches the US extract and rebuilds the data from scratch, as a deployed image should. Local Compose runs set `ROAD_DATA=local` and copy the cached, gitignored `data/road` instead, which takes about 30 seconds instead of half an hour. The image is about 10GB.
 
@@ -542,6 +542,7 @@ Some injected bugs were caught because a proof script stopped matching the code,
 - `POST /api/v1/organizations/{id}/revoke`, which takes the admin key and answers the new `Organization` schema, with `status` `revoked` from the `OrganizationStatus` enum. The organization's appraisals stay. Revoking again answers 200 and writes nothing.
 - `web/store.bend`: `rekeyed` and `revoked` changes in the log. The store keeps revoked organizations in their own list, `retired`, which no key is looked up in, so a revoked key can't match by any route. Ids still aren't reused. The snapshot head counts revoked organizations, and their lines follow the active ones.
 - `scripts/contract.mjs`: a third organization each run is rotated, revoked and rotated back, then revoked again. The crash test checks that its three keys are still refused after the web process is killed.
+- Review fixes: when `/dev/urandom` can't be read, an id nobody has still answers 404 and a name that breaks a rule still answers 422, where both were a 500 before. Compose passes the web process only `CLOVERLEAF_ADMIN_KEY` from `.env`, not every line in it, and the README's setup line no longer overwrites `.env`.
 
 Old log lines read the same, since both new fields are optional. An old snapshot's head lacks the `revoked` count, so it doesn't load and the whole log replays once, then a new snapshot is written. Nothing has to be cleared when upgrading.
 
@@ -552,10 +553,10 @@ This answers the earlier gap in part. A lost answer to a rotation is fixed by ro
 | Measure | Result |
 |---|---|
 | Laws | 26 new, in 202 lines. No existing law changed |
-| Web code | 4,516 lines, of which 4,119 are pure |
-| Proofs | 534 lines and 34 defs in the new `proof/keys.bend`, 2 lines changed and 2 cases added in `proof/store.bend`, and 2 cases added to each of 4 per-route proofs in `PROOF.bend` |
-| Checking everything | about 5.7s |
-| Scenarios | 24 new, 234 in all |
+| Web code | 4,534 lines, of which 4,137 are pure |
+| Proofs | 550 lines and 35 defs in the new `proof/keys.bend`, 2 lines changed and 2 cases added in `proof/store.bend`, and 2 cases added to each of 4 per-route proofs in `PROOF.bend` |
+| Checking everything | about 6.5s |
+| Scenarios | 26 new, 236 in all |
 | `@unsafe` or foreign code | None new |
 | `--verdict` | Not run: Lean isn't installed in this environment |
 
@@ -581,7 +582,7 @@ Proofs caught none in the code as written. Choosing how to mark a revoked key wa
 - `web/api.bend`: each route has an auth rule, `Open`, `Dealers` or `Admins`. The gate runs before the body is read. No key, or one nobody has, is a 401 with `WWW-Authenticate: Bearer`, and a key for the other kind of route is a 403. Lookups take the caller's organization, so another dealer's appraisal reads as 404, and idempotency keys are per organization. A key is `clv_` and 64 hex digits from 32 bytes of `/dev/urandom`.
 - `web/store.bend`: an `organized` change in the log, organizations in the store and the snapshot, ahead of the appraisals.
 - `web/openapi.bend`: `dealerKey` and `adminKey` Bearer schemes, each operation's `security`, and its 401 and 403.
-- `web/main.bend`: reads `CLOVERLEAF_ADMIN_KEY` at startup and keeps only its hash. A key that isn't at least 32 printable ASCII characters with no spaces sets no admin, and the process says so on stderr. Only a request to add an organization reads `/dev/urandom`.
+- `web/main.bend`: reads `CLOVERLEAF_ADMIN_KEY` at startup and keeps only its hash. A key that isn't at least 32 printable ASCII characters with no spaces sets no admin, and the process says so on stderr. Only a request to add an organization or rotate its key reads `/dev/urandom`. It reads it before the caller is checked, which costs less than hashing the caller's key.
 - `scripts/contract.mjs`: adds two organizations each run and checks the gate and that neither sees the other's appraisals. `scripts/sha256.test.mjs` checks the hash against Node's.
 
 The log and snapshot formats changed. A store from before this slice loads as empty: its old lines don't decode and are skipped, its appraisals are dropped, and ids start again at `a1`. There was no deployed data, and the README says to clear the appraisals volume when upgrading.

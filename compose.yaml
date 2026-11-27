@@ -16,10 +16,10 @@ services:
     memswap_limit: 512m
     # CLOVERLEAF_ADMIN_KEY, the key that adds dealer organizations, comes from
     # the gitignored .env. Without it the web process starts, and nobody is the
-    # admin.
-    env_file:
-      - path: .env
-        required: false
+    # admin. Only this variable is passed, so secrets in .env meant for other
+    # services never reach the web process.
+    environment:
+      CLOVERLEAF_ADMIN_KEY: ${CLOVERLEAF_ADMIN_KEY:-}
     volumes:
       - appraisals:/data
     expose:

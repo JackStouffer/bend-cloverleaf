@@ -1191,19 +1191,37 @@ def Api.organize.key(key: Maybe<&2, String>, name: String, id: String) -> Resolv
     case Some{+k}:
       Handle{Organize{name, id, k, H.Sha.text(k)}}
 
+# A name that breaks a rule is answered without a key, so it's a 422 even when
+# the random bytes couldn't be read.
+def Api.organize.named(p: Maybe<&2, St.Problem>, key: Maybe<&2, String>, name: String, id: String) -> Resolved:
+  match p:
+    case None{}:
+      Api.organize.key(key, name, id)
+    case Some{x}:
+      Handle{Organize{name, id, "", ""}}
+
 def Api.organize(m: Maybe<&2, String>, +seed: List<&2, U32>, store: St.Store) -> Resolved:
   match m:
     case None{}:
       Refuse{BadRequest{}, "invalid_body"}
-    case Some{n}:
-      Api.organize.key(Key.of(seed), n, St.Store.next.org(store))
+    case Some{+n}:
+      Api.organize.named(St.Org.problem(n), Key.of(seed), n, St.Store.next.org(store))
 
-def Api.rotate(key: Maybe<&2, String>, found: Maybe<&2, St.Org>) -> Resolved:
+def Api.rotate.key(key: Maybe<&2, String>, g: St.Org) -> Resolved:
   match key:
     case None{}:
       Refuse{ServerError{}, "no_entropy"}
     case Some{+k}:
-      Handle{Rotate{found, k, H.Sha.text(k)}}
+      Handle{Rotate{Some{g}, k, H.Sha.text(k)}}
+
+# An id nobody has is answered without a key, so it's a 404 even when the
+# random bytes couldn't be read.
+def Api.rotate(key: Maybe<&2, String>, found: Maybe<&2, St.Org>) -> Resolved:
+  match found:
+    case None{}:
+      Handle{Rotate{None{}, "", ""}}
+    case Some{g}:
+      Api.rotate.key(key, g)
 
 def Api.revoke(+i: String, +store: St.Store) -> Resolved:
   Handle{Revoke{St.Orgs.find(i, St.Store.orgs(store)), St.Orgs.find(i, St.Store.retired(store))}}

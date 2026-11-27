@@ -17,8 +17,8 @@ import ./utf8.bend as U
 #
 # CLOVERLEAF_ADMIN_KEY, from the gitignored .env, is the key that adds dealer
 # organizations. The process keeps only its hash. Without one, nobody is the
-# admin. A request to add an organization gets 32 bytes from /dev/urandom,
-# which its API key is made from. Other requests read none.
+# admin. A request to add an organization or rotate its key gets 32 bytes
+# from /dev/urandom, which the API key is made from. Other requests read none.
 
 def Job() -> Type:
   String & Chan(String)

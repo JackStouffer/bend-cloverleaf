@@ -1039,6 +1039,11 @@ def web.revoke.as(auth: String, id: String) -> String:
 def web.revoke(id: String) -> String:
   web.revoke.as(web.bearer(web.admin_key()), id)
 
+# Whether the request, handled with no random bytes, answers status and body
+# and writes nothing.
+def web.unseeded(+s: St.Store, +request: String, status: String, +body: String) -> Bool:
+  Bool.and(WJ.Text.same(WA.Handled.response(WA.Api.handle(request, s, web.admin(), [])), web.head(status, Nat.show(WJ.Text.bytes(body, 0n)), "") ++ body), Bool.not(Maybe.is_some(&2, St.Change, WA.Handled.change(WA.Api.handle(request, s, web.admin(), [])))))
+
 def web.org_not_found() -> String:
   "{\"error\":\"not_found\",\"detail\":\"No organization has this id\"}"
 
@@ -1196,6 +1201,8 @@ def key_checks() -> List<&2, Check>:
    Check{"a dealer key can't rotate a key", web.forbidden(web.two(), web.rotate.as(web.bearer(web.key1()), "o1"))},
    Check{"rotating with no key is 401", web.unauthorized(web.two(), web.rotate.as("", "o1"))},
    Check{"with no random bytes, rotating is 500 and writes nothing", Bool.and(WJ.Text.same(WA.Handled.response(WA.Api.handle(web.rotate("o1"), web.two(), web.admin(), [])), web.head("500 Internal Server Error", "22", "") ++ "{\"error\":\"no_entropy\"}"), Bool.not(Maybe.is_some(&2, St.Change, WA.Handled.change(WA.Api.handle(web.rotate("o1"), web.two(), web.admin(), [])))))},
+   Check{"with no random bytes, rotating an id nobody has is still 404", web.unseeded(web.two(), web.rotate("o9"), "404 Not Found", web.org_not_found())},
+   Check{"with no random bytes, a name that breaks a rule is still 422", web.unseeded(web.base(), web.organize(String.repeat("n", 101n)), "422 Unprocessable Content", "{\"error\":\"invalid_name\",\"detail\":\"name must be 1 to 100 characters\"}")},
    Check{"a request to rotate a key reads random bytes, and one to revoke doesn't", Bool.and(WA.Api.needs_seed(web.rotate("o1")), Bool.not(WA.Api.needs_seed(web.revoke("o1"))))},
    Check{"revoking a key answers 200 with the organization, revoked", web.answers(web.two(), web.revoke("o1"), "200 OK", web.org_revoked())},
    Check{"the log records the revoke", web.logged.revoke(WA.Handled.change(web.handle(web.revoke("o1"), web.two())))},
