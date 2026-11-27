@@ -758,12 +758,13 @@ law reading_writes_nothing:
 # An open appraisal is cancelled, and the log records it.
 law open_appraisal_is_cancelled:
   for +i: String
+  for +o: String
   for +k: String
   for +a: String
   for +z: String
   for +st: WSt.StateTag()
   for +d: String
-  {WA.Api.change(WA.Cancel{Some{WSt.Rec{i, k, a, z, st, d, T.Open{}}}}) == Some{WSt.Cancelled{i}} : Maybe<&2, WSt.Change>}
+  {WA.Api.change(WA.Cancel{Some{WSt.Rec{i, o, k, a, z, st, d, T.Open{}}}}) == Some{WSt.Cancelled{i}} : Maybe<&2, WSt.Change>}
 
 # An appraisal that's underway or completed can't be cancelled: nothing is
 # written, and the answer is 409.
@@ -781,18 +782,220 @@ law locked_appraisal_answers_409:
 # 200, so a cancel can be retried safely.
 law cancelling_twice_writes_nothing:
   for +i: String
+  for +o: String
   for +k: String
   for +a: String
   for +z: String
   for +st: WSt.StateTag()
   for +d: String
-  {WA.Api.change(WA.Cancel{Some{WSt.Rec{i, k, a, z, st, d, T.Cancelled{}}}}) == None{} : Maybe<&2, WSt.Change>}
+  {WA.Api.change(WA.Cancel{Some{WSt.Rec{i, o, k, a, z, st, d, T.Cancelled{}}}}) == None{} : Maybe<&2, WSt.Change>}
 
 law cancelling_twice_answers_200:
   for +i: String
+  for +o: String
   for +k: String
   for +a: String
   for +z: String
   for +st: WSt.StateTag()
   for +d: String
-  {WA.Op.status(WA.Cancel{Some{WSt.Rec{i, k, a, z, st, d, T.Cancelled{}}}}) == 200n : Nat}
+  {WA.Op.status(WA.Cancel{Some{WSt.Rec{i, o, k, a, z, st, d, T.Cancelled{}}}}) == 200n : Nat}
+
+# API keys
+# --------
+
+# Each route says who may call it. Laws about keys speak of the hash h of the
+# key a request brings, which the store compares, since it keeps no key.
+
+# A dealer route lets a caller through only as the dealer organization the
+# caller's key belongs to.
+law dealer_routes_pass_only_dealers:
+  for +w: WA.Who
+  for +o: String
+  for +e: {WA.Api.gate(WA.Dealers{}, w) == WA.Pass{o} : WA.Gate}
+  {w == WA.Dealer{o} : WA.Who}
+
+# An admin route lets only the admin through.
+law admin_routes_pass_only_the_admin:
+  for +w: WA.Who
+  for +o: String
+  for +e: {WA.Api.gate(WA.Admins{}, w) == WA.Pass{o} : WA.Gate}
+  {w == WA.Admin{} : WA.Who}
+
+# A request with no key, or a key nobody has, is refused with a 401 by any
+# route that needs a key.
+law no_key_is_unauthorized_for_dealers:
+  {WA.Api.gate(WA.Dealers{}, WA.Nobody{}) == WA.Deny{WA.Unauthorized{}, "unauthorized"} : WA.Gate}
+
+law no_key_is_unauthorized_for_admins:
+  {WA.Api.gate(WA.Admins{}, WA.Nobody{}) == WA.Deny{WA.Unauthorized{}, "unauthorized"} : WA.Gate}
+
+# A key for the other kind of route is refused with a 403.
+law admin_key_is_forbidden_for_dealer_routes:
+  {WA.Api.gate(WA.Dealers{}, WA.Admin{}) == WA.Deny{WA.Forbidden{}, "forbidden"} : WA.Gate}
+
+law dealer_key_is_forbidden_for_admin_routes:
+  for +o: String
+  {WA.Api.gate(WA.Admins{}, WA.Dealer{o}) == WA.Deny{WA.Forbidden{}, "forbidden"} : WA.Gate}
+
+law no_key_is_nobody:
+  for +admin: Maybe<&2, String>
+  for +gs: List<&2, WSt.Org>
+  {WA.Api.who(None{}, admin, gs) == WA.Nobody{} : WA.Who}
+
+# A key makes its caller a dealer only when the store holds an organization
+# with that id and that key's hash.
+law dealer_has_a_stored_key:
+  for +h: String
+  for +admin: Maybe<&2, String>
+  for +gs: List<&2, WSt.Org>
+  for +o: String
+  for +e: {WA.Api.known(h, admin, gs) == WA.Dealer{o} : WA.Who}
+  {WSt.Orgs.holds(o, h, gs) == True{} : Bool}
+
+# Without an admin key in the environment, nobody is the admin.
+law no_admin_without_an_admin_key:
+  for +h: String
+  for +gs: List<&2, WSt.Org>
+  for e: {WA.Api.known(h, None{}, gs) == WA.Admin{} : WA.Who}
+  Empty
+
+# A new organization's key, once the organization is stored, signs in as
+# that organization, unless it's the admin key.
+law new_key_signs_in:
+  for +h: String
+  for +i: String
+  for +n: String
+  for +gs: List<&2, WSt.Org>
+  {WA.Api.known(h, None{}, WSt.Org{i, n, h} <> gs) == WA.Dealer{i} : WA.Who}
+
+law new_key_signs_in_beside_the_admin:
+  for +h: String
+  for +a: String
+  for +i: String
+  for +n: String
+  for +gs: List<&2, WSt.Org>
+  for +e: {WJ.Text.same(h, a) == False{} : Bool}
+  {WA.Api.known(h, Some{a}, WSt.Org{i, n, h} <> gs) == WA.Dealer{i} : WA.Who}
+
+# Adding organizations
+# --------------------
+
+# A name that breaks a rule writes nothing and answers 422.
+law bad_name_writes_nothing:
+  for +n: String
+  for +i: String
+  for +k: String
+  for +h: String
+  for +c: String
+  for +t: String
+  for +p: {WSt.Org.problem(n) == Some{WSt.Problem{c, t}} : Maybe<&2, WSt.Problem>}
+  {WA.Api.change(WA.Organize{n, i, k, h}) == None{} : Maybe<&2, WSt.Change>}
+
+law bad_name_answers_422:
+  for +n: String
+  for +i: String
+  for +k: String
+  for +h: String
+  for +c: String
+  for +t: String
+  for +p: {WSt.Org.problem(n) == Some{WSt.Problem{c, t}} : Maybe<&2, WSt.Problem>}
+  {WA.Op.status(WA.Organize{n, i, k, h}) == 422n : Nat}
+
+# A good name is logged with the key's hash and never the key, and answers
+# 201 with the key, the one time it's shown.
+law good_name_logs_only_the_hash:
+  for +n: String
+  for +i: String
+  for +k: String
+  for +h: String
+  for +p: {WSt.Org.problem(n) == None{} : Maybe<&2, WSt.Problem>}
+  {WA.Api.change(WA.Organize{n, i, k, h}) == Some{WSt.Organized{WSt.Org{i, n, h}}} : Maybe<&2, WSt.Change>}
+
+law good_name_answers_201:
+  for +n: String
+  for +i: String
+  for +k: String
+  for +h: String
+  for +p: {WSt.Org.problem(n) == None{} : Maybe<&2, WSt.Problem>}
+  {WA.Op.status(WA.Organize{n, i, k, h}) == 201n : Nat}
+
+law good_name_answers_the_key:
+  for +n: String
+  for +i: String
+  for +k: String
+  for +h: String
+  for +p: {WSt.Org.problem(n) == None{} : Maybe<&2, WSt.Problem>}
+  {WA.Reply.body(WA.Route.answers(WA.Op.route(WA.Organize{n, i, k, h})), WA.Api.run(WA.Organize{n, i, k, h})) == WS.encode(WSt.Schemas.org.key(), (i, (n, (k, Unit{})))) : WJ.Json}
+
+# Tenant isolation
+# ----------------
+
+# A dealer's lookups only find records its own organization owns, so another
+# dealer's appraisal reads as missing.
+law owned_lookup_is_the_callers:
+  for +o: String
+  for +i: String
+  for +rs: List<&2, WSt.Rec>
+  for +r: WSt.Rec
+  for +e: {WSt.Store.owned(o, i, rs) == Some{r} : Maybe<&2, WSt.Rec>}
+  {WJ.Text.same(o, WSt.Rec.org(r)) == True{} : Bool}
+
+law key_lookup_is_the_callers:
+  for +o: String
+  for +k: String
+  for +rs: List<&2, WSt.Rec>
+  for +r: WSt.Rec
+  for +e: {WSt.Store.by_key(o, k, rs) == Some{r} : Maybe<&2, WSt.Rec>}
+  {WJ.Text.same(o, WSt.Rec.org(r)) == True{} : Bool}
+
+# So a request the gate passed as organization o reads, cancels and repeats
+# only o's appraisals, and a new one belongs to o, whatever its body says.
+law reading_finds_only_the_callers:
+  for +ps: List<&2, String>
+  for +body: String
+  for +s: WSt.Store
+  for +o: String
+  for +seed: List<&2, U32>
+  for +r: WSt.Rec
+  for +e: {WA.Api.resolve(WA.EFetch{}, ps, body, s, o, seed) == WA.Handle{WA.Fetch{Some{r}}} : WA.Resolved}
+  {WJ.Text.same(o, WSt.Rec.org(r)) == True{} : Bool}
+
+law cancelling_finds_only_the_callers:
+  for +ps: List<&2, String>
+  for +body: String
+  for +s: WSt.Store
+  for +o: String
+  for +seed: List<&2, U32>
+  for +r: WSt.Rec
+  for +e: {WA.Api.resolve(WA.ECancel{}, ps, body, s, o, seed) == WA.Handle{WA.Cancel{Some{r}}} : WA.Resolved}
+  {WJ.Text.same(o, WSt.Rec.org(r)) == True{} : Bool}
+
+law repeat_key_finds_only_the_callers:
+  for +ps: List<&2, String>
+  for +body: String
+  for +s: WSt.Store
+  for +o: String
+  for +seed: List<&2, U32>
+  for +d: WSt.Draft
+  for +r: WSt.Rec
+  for +id: String
+  for +e: {WA.Api.resolve(WA.ECreate{}, ps, body, s, o, seed) == WA.Handle{WA.Create{d, Some{r}, id}} : WA.Resolved}
+  {WJ.Text.same(o, WSt.Rec.org(r)) == True{} : Bool}
+
+law new_request_belongs_to_the_caller:
+  for +ps: List<&2, String>
+  for +body: String
+  for +s: WSt.Store
+  for +o: String
+  for +seed: List<&2, U32>
+  for +d: WSt.Draft
+  for +k: Maybe<&2, WSt.Rec>
+  for +id: String
+  for +e: {WA.Api.resolve(WA.ECreate{}, ps, body, s, o, seed) == WA.Handle{WA.Create{d, k, id}} : WA.Resolved}
+  {WSt.Draft.org(d) == o : String}
+
+# And the record a new request logs is the caller's.
+law logged_request_is_the_callers:
+  for +id: String
+  for +d: WSt.Draft
+  {WSt.Rec.org(WSt.Rec.new(id, d)) == WSt.Draft.org(d) : String}

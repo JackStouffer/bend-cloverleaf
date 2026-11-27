@@ -6,6 +6,7 @@ import ./json.bend as J
 import ./schema.bend as S
 import ./store.bend as St
 import ./utf8.bend as U
+import ./sha256.bend as H
 
 # The route table and the HTTP layer around it. Every route is a value here,
 # holding its method, path, operation id, request body and the answers it can
@@ -13,7 +14,11 @@ import ./utf8.bend as U
 # that value, so they can't drift apart. A path segment written {name} is a
 # path parameter, and matches any segment that isn't empty.
 #
-# Still to come: query parameters and auth rules.
+# Each route also says who may call it. A caller proves who they are with an
+# API key in an Authorization: Bearer header, and the store keeps only each
+# key's SHA-256, so a leaked store or log holds no working key.
+#
+# Still to come: query parameters, and people signing in with roles.
 
 type Method is Data:
   Get{}
@@ -177,6 +182,13 @@ def Status.reason(s: Status) -> String:
     case ServerError{}:
       "Internal Server Error"
 
+# Who may call a route. Open needs no key, Dealers needs a dealer
+# organization's key, and Admins needs the admin key from the environment.
+type Auth is Data:
+  Open{}
+  Dealers{}
+  Admins{}
+
 # A status a route can answer with, and the schema of its body.
 type Answer is Data:
   Answer{status: Status, description: String, schema: S.Schema}
@@ -184,31 +196,36 @@ type Answer is Data:
 # writes says whether the route's handler can change the store, so the shell
 # can answer it with a 500 when the log can't be written.
 type Route is Data:
-  Route{method: Method, path: String, id: String, summary: String, body: Maybe<&2, S.Schema>, writes: Bool, answers: List<&2, Answer>}
+  Route{method: Method, path: String, id: String, summary: String, body: Maybe<&2, S.Schema>, writes: Bool, auth: Auth, answers: List<&2, Answer>}
 
 def Route.method(r: Route) -> Method:
   match r:
-    case Route{m, p, i, s, b, w, a}:
+    case Route{m, p, i, s, b, w, u, a}:
       m
 
 def Route.path(r: Route) -> String:
   match r:
-    case Route{m, p, i, s, b, w, a}:
+    case Route{m, p, i, s, b, w, u, a}:
       p
 
 def Route.body(r: Route) -> Maybe<&2, S.Schema>:
   match r:
-    case Route{m, p, i, s, b, w, a}:
+    case Route{m, p, i, s, b, w, u, a}:
       b
 
 def Route.writes(r: Route) -> Bool:
   match r:
-    case Route{m, p, i, s, b, w, a}:
+    case Route{m, p, i, s, b, w, u, a}:
       w
+
+def Route.auth(r: Route) -> Auth:
+  match r:
+    case Route{m, p, i, s, b, w, u, a}:
+      u
 
 def Route.answers(r: Route) -> List<&2, Answer>:
   match r:
-    case Route{m, p, i, s, b, w, a}:
+    case Route{m, p, i, s, b, w, u, a}:
       a
 
 # Replies
@@ -323,36 +340,45 @@ type Endpoint is Data:
   ECreate{}
   EFetch{}
   ECancel{}
+  EOrganize{}
 
 def Endpoint.route(e: Endpoint) -> Route:
   match e:
     case EHealth{}:
-      Route{Get{}, "/api/health", "getHealth", "Whether the web process is up", None{}, False{},
+      Route{Get{}, "/api/health", "getHealth", "Whether the web process is up", None{}, False{}, Open{},
         [Answer{OK{}, "The web process is up", Schemas.health()}]}
     case ECreate{}:
-      Route{Post{}, "/api/v1/appraisals", "createAppraisal", "Request an appraisal. Sending the same key again is safe", Some{St.Schemas.draft()}, True{},
+      Route{Post{}, "/api/v1/appraisals", "createAppraisal", "Request an appraisal. Sending the same key again is safe", Some{St.Schemas.draft()}, True{}, Dealers{},
         [Answer{Created{}, "The appraisal was requested", St.Schemas.appraisal()},
          Answer{OK{}, "An appraisal with this key was already requested, so nothing changed", St.Schemas.appraisal()},
          Answer{Unprocessable{}, "The request breaks a rule, which error names", Schemas.error()}]}
     case EFetch{}:
-      Route{Get{}, "/api/v1/appraisals/{id}", "getAppraisal", "Read an appraisal", None{}, False{},
+      Route{Get{}, "/api/v1/appraisals/{id}", "getAppraisal", "Read one of your organization's appraisals", None{}, False{}, Dealers{},
         [Answer{OK{}, "The appraisal", St.Schemas.appraisal()},
-         Answer{NotFound{}, "No appraisal has this id", Schemas.error()}]}
+         Answer{NotFound{}, "Your organization has no appraisal with this id", Schemas.error()}]}
     case ECancel{}:
-      Route{Post{}, "/api/v1/appraisals/{id}/cancel", "cancelAppraisal", "Cancel an appraisal. Cancelling one that's already cancelled changes nothing", None{}, True{},
+      Route{Post{}, "/api/v1/appraisals/{id}/cancel", "cancelAppraisal", "Cancel one of your organization's appraisals. Cancelling one that's already cancelled changes nothing", None{}, True{}, Dealers{},
         [Answer{OK{}, "The appraisal, now cancelled", St.Schemas.appraisal()},
-         Answer{NotFound{}, "No appraisal has this id", Schemas.error()},
+         Answer{NotFound{}, "Your organization has no appraisal with this id", Schemas.error()},
          Answer{Conflict{}, "The appraisal is underway or completed, so it can't be cancelled", Schemas.error()}]}
+    case EOrganize{}:
+      Route{Post{}, "/api/v1/organizations", "createOrganization", "Add a dealer organization and issue its API key, which is shown only in this answer", Some{St.Schemas.org.draft()}, True{}, Admins{},
+        [Answer{Created{}, "The organization was added. Keep apiKey: it can't be read again", St.Schemas.org.key()},
+         Answer{Unprocessable{}, "The name breaks a rule, which error names", Schemas.error()}]}
 
 # A request with what the handler needs from the store already looked up, so
 # the handlers stay pure and the laws cover every store they could meet.
 # Create carries the draft, the record already stored under its key if any,
-# and the id a new record would get.
+# and the id a new record would get. The draft names the caller's
+# organization, and known, like Fetch's and Cancel's found, is only ever one
+# of that organization's records. Organize carries the new organization's
+# name, its id, its new API key and that key's hash.
 type Op is Data:
   Health{}
   Create{draft: St.Draft, known: Maybe<&2, St.Rec>, id: String}
   Fetch{found: Maybe<&2, St.Rec>}
   Cancel{found: Maybe<&2, St.Rec>}
+  Organize{name: String, id: String, key: String, hash: String}
 
 def Op.endpoint(op: Op) -> Endpoint:
   match op:
@@ -364,12 +390,14 @@ def Op.endpoint(op: Op) -> Endpoint:
       EFetch{}
     case Cancel{f}:
       ECancel{}
+    case Organize{n, i, k, h}:
+      EOrganize{}
 
 def Op.route(op: Op) -> Route:
   Endpoint.route(Op.endpoint(op))
 
 def Api.ops() -> List<&2, Endpoint>:
-  [EHealth{}, ECreate{}, EFetch{}, ECancel{}]
+  [EHealth{}, ECreate{}, EFetch{}, ECancel{}, EOrganize{}]
 
 def Api.routes(ops: List<&2, Endpoint>) -> List<&2, Route>:
   match ops:
@@ -393,6 +421,9 @@ def FetchReply() -> Data:
 def CancelReply() -> Data:
   Reply(Route.answers(Endpoint.route(ECancel{})))
 
+def OrganizeReply() -> Data:
+  Reply(Route.answers(Endpoint.route(EOrganize{})))
+
 def Create.fresh(p: Maybe<&2, St.Problem>, d: St.Draft, id: String) -> CreateReply():
   match p:
     case None{}:
@@ -412,7 +443,7 @@ def Fetch.reply(found: Maybe<&2, St.Rec>) -> FetchReply():
     case Some{r}:
       Done{St.Rec.value(r)}
     case None{}:
-      Fail{Done{Api.fail("not_found", "No appraisal has this id")}}
+      Fail{Done{Api.fail("not_found", "Your organization has no appraisal with this id")}}
 
 def Cancel.next(m: Maybe<&2, T.Status>, r: St.Rec) -> CancelReply():
   match m:
@@ -433,7 +464,14 @@ def Cancel.reply(found: Maybe<&2, St.Rec>) -> CancelReply():
     case Some{+r}:
       Cancel.pick(St.Status.is_cancelled(St.Rec.status(r)), r)
     case None{}:
-      Fail{Done{Api.fail("not_found", "No appraisal has this id")}}
+      Fail{Done{Api.fail("not_found", "Your organization has no appraisal with this id")}}
+
+def Organize.reply(p: Maybe<&2, St.Problem>, name: String, id: String, key: String) -> OrganizeReply():
+  match p:
+    case None{}:
+      Done{(id, (name, (key, Unit{})))}
+    case Some{St.Problem{code, detail}}:
+      Fail{Done{Api.fail(code, detail)}}
 
 # The handlers. Each one's type comes from its route, so a reply the route
 # doesn't declare is a type error.
@@ -447,6 +485,8 @@ def Api.run(op: Op) -> Reply(Route.answers(Op.route(op))):
       Fetch.reply(found)
     case Cancel{found}:
       Cancel.reply(found)
+    case Organize{+name, id, key, hash}:
+      Organize.reply(St.Org.problem(name), name, id, key)
 
 # The status code a handler answers with.
 def Op.status(+op: Op) -> Nat:
@@ -482,12 +522,22 @@ def Cancel.change(found: Maybe<&2, St.Rec>) -> Maybe<&2, St.Change>:
     case None{}:
       None{}
 
+# The log keeps the new key's hash, never the key.
+def Organize.made(p: Maybe<&2, St.Problem>, name: String, id: String, hash: String) -> Maybe<&2, St.Change>:
+  match p:
+    case None{}:
+      Some{St.Organized{St.Org{id, name, hash}}}
+    case Some{x}:
+      None{}
+
 def Api.change(op: Op) -> Maybe<&2, St.Change>:
   match op:
     case Create{d, known, id}:
       Create.change(known, d, id)
     case Cancel{found}:
       Cancel.change(found)
+    case Organize{+name, id, key, hash}:
+      Organize.made(St.Org.problem(name), name, id, hash)
     case other:
       None{}
 
@@ -610,6 +660,164 @@ def Api.error(status: Status, headers: String, code: String, send: Bool) -> Stri
 def Api.reply(+op: Op, send: Bool) -> String:
   Http.response(Reply.state(Route.answers(Op.route(op)), Api.run(op)), "",
     J.Json.print(Reply.body(Route.answers(Op.route(op)), Api.run(op))), send)
+
+# Callers
+# -------
+
+# Who sent a request, from its key: nobody, the admin, or a dealer
+# organization, by id.
+type Who is Data:
+  Nobody{}
+  Admin{}
+  Dealer{org: String}
+
+# Whether a route lets the caller through, and as which organization. An
+# admin or an open route passes with no organization.
+type Gate is Data:
+  Pass{org: String}
+  Deny{status: Status, code: String}
+
+# A caller with no key, or a key nobody has, gets a 401. A caller with a key
+# for the wrong kind of route gets a 403.
+def Api.gate(rule: Auth, who: Who) -> Gate:
+  match rule who:
+    case Open{} w:
+      Pass{""}
+    case Dealers{} Dealer{o}:
+      Pass{o}
+    case Admins{} Admin{}:
+      Pass{""}
+    case r Nobody{}:
+      Deny{Unauthorized{}, "unauthorized"}
+    case r w:
+      Deny{Forbidden{}, "forbidden"}
+
+def Api.dealer(m: Maybe<&2, St.Org>) -> Who:
+  match m:
+    case Some{g}:
+      Dealer{St.Org.id(g)}
+    case None{}:
+      Nobody{}
+
+def Api.known.pick(admin: Bool, +h: String, orgs: List<&2, St.Org>) -> Who:
+  match admin:
+    case True{}:
+      Admin{}
+    case False{}:
+      Api.dealer(St.Orgs.by_hash(h, orgs))
+
+# The caller whose key has the hash h. admin is the admin key's hash, or None
+# when the environment sets no admin key, and then nobody is the admin.
+def Api.known(+h: String, admin: Maybe<&2, String>, orgs: List<&2, St.Org>) -> Who:
+  match admin:
+    case Some{a}:
+      Api.known.pick(J.Text.same(h, a), h, orgs)
+    case None{}:
+      Api.dealer(St.Orgs.by_hash(h, orgs))
+
+def Api.who(token: Maybe<&2, String>, admin: Maybe<&2, String>, orgs: List<&2, St.Org>) -> Who:
+  match token:
+    case None{}:
+      Nobody{}
+    case Some{t}:
+      Api.known(H.Sha.text(t), admin, orgs)
+
+# An open route needs no key, so its requests are never hashed.
+def Api.check(rule: Auth, token: Maybe<&2, String>, admin: Maybe<&2, String>, orgs: List<&2, St.Org>) -> Gate:
+  match rule:
+    case Open{}:
+      Pass{""}
+    case other:
+      Api.gate(other, Api.who(token, admin, orgs))
+
+# A key is printable ASCII with no spaces: what Sha.text hashes byte for byte.
+def Key.char(+c: Char) -> Bool:
+  Nat.is_le(33n, J.Text.code(c)) && Nat.is_le(J.Text.code(c), 126n)
+
+def Key.chars(s: String) -> Bool:
+  match s:
+    case SNil{}:
+      True{}
+    case SCon{+c, t}:
+      Key.char(c) && Key.chars(t)
+
+def Key.ok(+s: String) -> Bool:
+  Key.chars(s) && Bool.not(String.is_empty(s))
+
+def Key.keep(ok: Bool, s: String) -> Maybe<&2, String>:
+  match ok:
+    case True{}:
+      Some{s}
+    case False{}:
+      None{}
+
+def Http.bearer.pick(hit: Bool, +value: String) -> Maybe<&2, String>:
+  match hit:
+    case True{}:
+      +t = String.trim(String.drop(value, 7n))
+      Key.keep(Key.ok(t), t)
+    case False{}:
+      None{}
+
+# The key in an Authorization header's value, which names the Bearer scheme
+# in any case.
+def Http.bearer(+value: String) -> Maybe<&2, String>:
+  Http.bearer.pick(String.starts_with(String.to_lower(value), "bearer "), value)
+
+def Http.token.pick(hit: Bool, +line: String, rest: Maybe<&2, String>) -> Maybe<&2, String>:
+  match hit:
+    case True{}:
+      Http.bearer(String.trim(String.drop(line, 14n)))
+    case False{}:
+      rest
+
+# The key from the first Authorization header, or None. Header names ignore
+# case.
+def Http.token(lines: List<&2, String>) -> Maybe<&2, String>:
+  match lines:
+    case Nil{}:
+      None{}
+    case Con{+line, rest}:
+      Http.token.pick(String.starts_with(String.to_lower(line), "authorization:"), line, Http.token(rest))
+
+# The admin key's hash, from the environment's CLOVERLEAF_ADMIN_KEY. A key
+# shorter than 32 characters, or one with a space or a character that isn't
+# ASCII, sets no admin.
+def Api.admin.pick(ok: Bool, key: String) -> Maybe<&2, String>:
+  match ok:
+    case True{}:
+      Some{H.Sha.text(key)}
+    case False{}:
+      None{}
+
+def Api.admin(+key: String) -> Maybe<&2, String>:
+  Api.admin.pick(Key.ok(key) && Nat.is_le(32n, String.length(key)), key)
+
+# A new organization's API key from 32 random bytes the shell reads: clv_ and
+# 64 hex digits. None if the shell couldn't read them.
+def Key.hex(bs: List<&2, U32>) -> String:
+  match bs:
+    case Nil{}:
+      ""
+    case Con{+b, rest}:
+      SCon{H.Sha.nibble(Nat.div(U32.to_nat(b), 16n)), SCon{H.Sha.nibble(Nat.mod(U32.to_nat(b), 16n)), Key.hex(rest)}}
+
+def Key.bytes(bs: List<&2, U32>) -> Bool:
+  match bs:
+    case Nil{}:
+      True{}
+    case Con{+b, rest}:
+      Nat.is_lt(U32.to_nat(b), 256n) && Key.bytes(rest)
+
+def Key.pick(ok: Bool, bs: List<&2, U32>) -> Maybe<&2, String>:
+  match ok:
+    case True{}:
+      Some{"clv_" ++ Key.hex(bs)}
+    case False{}:
+      None{}
+
+def Key.of(+bs: List<&2, U32>) -> Maybe<&2, String>:
+  Key.pick(Nat.is_eq(List.length(&2, U32, bs), 32n) && Key.bytes(bs), bs)
 
 # Request bodies
 # --------------
@@ -854,76 +1062,154 @@ def Api.missing(allow: String, send: Bool) -> String:
 def Api.json(s: String) -> Maybe<&2, J.Json>:
   J.Json.parse(s)
 
-def Api.draft.of(m: Maybe<&2, S.Value(St.Schemas.draft())>) -> Maybe<&2, St.Draft>:
+def Api.draft.of(org: String, m: Maybe<&2, S.Value(St.Schemas.draft())>) -> Maybe<&2, St.Draft>:
   match m:
     case None{}:
       None{}
     case Some{v}:
-      Some{St.Draft.of(v)}
+      Some{St.Draft.of(org, v)}
 
-def Api.draft.json(m: Maybe<&2, J.Json>) -> Maybe<&2, St.Draft>:
+def Api.draft.json(org: String, m: Maybe<&2, J.Json>) -> Maybe<&2, St.Draft>:
   match m:
     case None{}:
       None{}
     case Some{+j}:
-      Api.draft.of(S.decode(St.Schemas.draft(), j))
+      Api.draft.of(org, S.decode(St.Schemas.draft(), j))
 
-# A body that isn't a NewAppraisal is refused before any handler sees it.
-def Api.draft(body: String) -> Maybe<&2, St.Draft>:
-  Api.draft.json(Api.json(body))
+# A body that isn't a NewAppraisal is refused before any handler sees it. The
+# draft belongs to the caller's organization, whatever the body says.
+def Api.draft(org: String, body: String) -> Maybe<&2, St.Draft>:
+  Api.draft.json(org, Api.json(body))
 
-def Api.create(m: Maybe<&2, St.Draft>, +store: St.Store) -> Maybe<&2, Op>:
+def Api.name.of(m: Maybe<&2, S.Value(St.Schemas.org.draft())>) -> Maybe<&2, String>:
   match m:
     case None{}:
       None{}
-    case Some{+d}:
-      Some{Create{d, St.Store.by_key(St.Draft.key(d), St.Store.recs(store)), St.Store.next(store)}}
+    case Some{v}:
+      (n, u) = v
+      Some{n}
 
-# Looks up what the handler needs from the store. None if the body is wrong.
-def Api.resolve(ep: Endpoint, params: List<&2, String>, body: String, +store: St.Store) -> Maybe<&2, Op>:
+def Api.name.json(m: Maybe<&2, J.Json>) -> Maybe<&2, String>:
+  match m:
+    case None{}:
+      None{}
+    case Some{+j}:
+      Api.name.of(S.decode(St.Schemas.org.draft(), j))
+
+def Api.name(body: String) -> Maybe<&2, String>:
+  Api.name.json(Api.json(body))
+
+# What the dispatcher does with a matched request: the handler's op, or an
+# error it sends itself.
+type Resolved is Data:
+  Handle{op: Op}
+  Refuse{status: Status, code: String}
+
+def Api.create(m: Maybe<&2, St.Draft>, +org: String, +store: St.Store) -> Resolved:
+  match m:
+    case None{}:
+      Refuse{BadRequest{}, "invalid_body"}
+    case Some{+d}:
+      Handle{Create{d, St.Store.by_key(org, St.Draft.key(d), St.Store.recs(store)), St.Store.next(store)}}
+
+def Api.organize.key(key: Maybe<&2, String>, name: String, id: String) -> Resolved:
+  match key:
+    case None{}:
+      Refuse{ServerError{}, "no_entropy"}
+    case Some{+k}:
+      Handle{Organize{name, id, k, H.Sha.text(k)}}
+
+def Api.organize(m: Maybe<&2, String>, +seed: List<&2, U32>, store: St.Store) -> Resolved:
+  match m:
+    case None{}:
+      Refuse{BadRequest{}, "invalid_body"}
+    case Some{n}:
+      Api.organize.key(Key.of(seed), n, St.Store.next.org(store))
+
+# Looks up what the handler needs from the store, for the caller's
+# organization org. A dealer's lookups only ever find that dealer's records.
+def Api.resolve(ep: Endpoint, params: List<&2, String>, body: String, +store: St.Store, +org: String, seed: List<&2, U32>) -> Resolved:
   match ep:
     case EHealth{}:
-      Some{Health{}}
+      Handle{Health{}}
     case ECreate{}:
-      Api.create(Api.draft(body), store)
+      Api.create(Api.draft(org, body), org, store)
     case EFetch{}:
-      Some{Fetch{St.Store.find(Path.first(params), St.Store.recs(store))}}
+      Handle{Fetch{St.Store.owned(org, Path.first(params), St.Store.recs(store))}}
     case ECancel{}:
-      Some{Cancel{St.Store.find(Path.first(params), St.Store.recs(store))}}
+      Handle{Cancel{St.Store.owned(org, Path.first(params), St.Store.recs(store))}}
+    case EOrganize{}:
+      Api.organize(Api.name(body), seed, store)
 
 # The response, and the change the log has to record before it's sent.
 type Handled is Data:
   Handled{response: String, change: Maybe<&2, St.Change>}
 
-def Api.resolved(m: Maybe<&2, Op>, send: Bool) -> Handled:
+def Api.resolved(m: Resolved, send: Bool) -> Handled:
   match m:
-    case Some{+op}:
+    case Handle{+op}:
       Handled{Api.reply(op, send), Api.change(op)}
-    case None{}:
-      Handled{Api.error(BadRequest{}, "", "invalid_body", send), None{}}
+    case Refuse{status, code}:
+      Handled{Api.error(status, "", code, send), None{}}
 
-def Api.found(hit: Maybe<&2, Hit>, allow: String, send: Bool, body: String, +store: St.Store) -> Handled:
+def Api.denied(+status: Status) -> String:
+  match status:
+    case Unauthorized{}:
+      "WWW-Authenticate: Bearer\r\n"
+    case other:
+      ""
+
+def Api.passed(g: Gate, ep: Endpoint, ps: List<&2, String>, send: Bool, body: String, +store: St.Store, seed: List<&2, U32>) -> Handled:
+  match g:
+    case Pass{o}:
+      Api.resolved(Api.resolve(ep, ps, body, store, o, seed), send)
+    case Deny{+status, code}:
+      Handled{Api.error(status, Api.denied(status), code, send), None{}}
+
+# A matched route checks its caller before it reads the body, so a request
+# without the right key learns nothing from it.
+def Api.found(hit: Maybe<&2, Hit>, allow: String, send: Bool, body: String, +store: St.Store, token: Maybe<&2, String>, admin: Maybe<&2, String>, seed: List<&2, U32>) -> Handled:
   match hit:
-    case Some{Hit{ep, ps}}:
-      Api.resolved(Api.resolve(ep, ps, body, store), send)
+    case Some{Hit{+ep, ps}}:
+      Api.passed(Api.check(Route.auth(Endpoint.route(ep)), token, admin, St.Store.orgs(store)), ep, ps, send, body, store, seed)
     case None{}:
       Handled{Api.missing(allow, send), None{}}
 
-def Api.dispatch(line: Maybe<&2, Line>, body: String, +store: St.Store) -> Handled:
+def Api.dispatch(line: Maybe<&2, Line>, body: String, +store: St.Store, token: Maybe<&2, String>, admin: Maybe<&2, String>, seed: List<&2, U32>) -> Handled:
   match line:
     case Some{Line{+m, +path}}:
-      Api.found(Api.hit(m, path, Api.ops()), Api.allow(path, Api.ops()), Bool.not(Method.is_head(m)), body, store)
+      Api.found(Api.hit(m, path, Api.ops()), Api.allow(path, Api.ops()), Bool.not(Method.is_head(m)), body, store, token, admin, seed)
     case None{}:
       Handled{Api.error(BadRequest{}, "", "bad_request", True{}), None{}}
 
-def Api.handled(+text: String, +store: St.Store) -> Handled:
-  Api.dispatch(Http.line(text), Http.payload(text), store)
+def Api.handled(+text: String, +store: St.Store, admin: Maybe<&2, String>, seed: List<&2, U32>) -> Handled:
+  Api.dispatch(Http.line(text), Http.payload(text), store, Http.token(String.lines(Http.head(text))), admin, seed)
 
-# The whole web handler: request text and the store in, the response and the
-# change to log out. Empty lines before the request line are ignored, as RFC
-# 9112 asks, so they can't be taken for the end of the headers either.
-def Api.handle(+text: String, +store: St.Store) -> Handled:
-  Api.handled(Text.skip(text), store)
+# Whether a request asks to add an organization, the one handler that uses the
+# random bytes, so the web process reads /dev/urandom only for those.
+def Api.seeds.hit(hit: Maybe<&2, Hit>) -> Bool:
+  match hit:
+    case Some{Hit{EOrganize{}, ps}}:
+      True{}
+    case other:
+      False{}
+
+def Api.seeds.line(line: Maybe<&2, Line>) -> Bool:
+  match line:
+    case Some{Line{+m, +path}}:
+      Api.seeds.hit(Api.hit(m, path, Api.ops()))
+    case None{}:
+      False{}
+
+def Api.needs_seed(text: String) -> Bool:
+  Api.seeds.line(Http.line(Text.skip(text)))
+
+# The whole web handler: request text, the store, the admin key's hash and 32
+# random bytes in, the response and the change to log out. Empty lines before
+# the request line are ignored, as RFC 9112 asks, so they can't be taken for
+# the end of the headers either.
+def Api.handle(+text: String, +store: St.Store, admin: Maybe<&2, String>, seed: List<&2, U32>) -> Handled:
+  Api.handled(Text.skip(text), store, admin, seed)
 
 def Handled.response(h: Handled) -> String:
   match h:

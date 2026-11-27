@@ -14,6 +14,11 @@ import ./utf8.bend as U
 # after the replay. Both are read and written a line at a time, so neither is
 # ever held whole. A snapshot cut off by a crash doesn't load, and then the
 # whole log is replayed.
+#
+# CLOVERLEAF_ADMIN_KEY, from the gitignored .env, is the key that adds dealer
+# organizations. The process keeps only its hash. Without one, nobody is the
+# admin. A request to add an organization gets 32 bytes from /dev/urandom,
+# which its API key is made from. Other requests read none.
 
 def Job() -> Type:
   String & Chan(String)
@@ -57,21 +62,54 @@ def logged(change: Maybe<&2, St.Change>, response: String, log: File, torn: Bool
 def handled(+h: Api.Handled, log: File, torn: Bool, +store: St.Store, reply: Chan(String), next: Next()) -> IO(Unit):
   logged(Api.Handled.change(h), Api.Handled.response(h), log, torn, store, reply, next)
 
-def took(got: Maybe<&1, Job()>, log: File, torn: Bool, +store: St.Store, next: Next()) -> IO(Unit):
+def seed.bytes(got: Result<&1, &1, U32 & String, List<&2, U32>>) -> List<&2, U32>:
+  match got:
+    case Done{bs}:
+      bs
+    case Fail{e}:
+      []
+
+def seeded(p: Bytes(), text: String, reply: Chan(String), log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
+  (f, got) = p
+  do IO<Unit>:
+    File.close(f)
+    handled(Api.Api.handle(text, store, admin, seed.bytes(got)), log, torn, store, reply, next)
+
+# A request that can't read the random bytes still gets an answer: one that
+# needs a new key is refused.
+def seed.opened(o: Result<&1, &1, U32 & String, File>, text: String, reply: Chan(String), log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
+  match o:
+    case Fail{e}:
+      handled(Api.Api.handle(text, store, admin, []), log, torn, store, reply, next)
+    case Done{f}:
+      IO.bind(Bytes(), Unit, File.read_bytes(f, 32), p => seeded(p, text, reply, log, torn, store, admin, next))
+
+def seed.wanted(want: Bool, +text: String, reply: Chan(String), log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
+  match want:
+    case True{}:
+      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open("/dev/urandom", "r"),
+        o => seed.opened(o, text, reply, log, torn, store, admin, next))
+    case False{}:
+      handled(Api.Api.handle(text, store, admin, []), log, torn, store, reply, next)
+
+def seed.chosen(+text: String, reply: Chan(String), log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
+  seed.wanted(Api.Api.needs_seed(text), text, reply, log, torn, store, admin, next)
+
+def took(got: Maybe<&1, Job()>, log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
   match got:
     case None{}:
       File.close(log)
     case Some{job}:
       (text, reply) = job
-      handled(Api.Api.handle(text, store), log, torn, store, reply, next)
+      seed.chosen(text, reply, log, torn, store, admin, next)
 
-def keep(fuel: Nat, log: File, torn: Bool, store: St.Store, +jobs: Chan(Job())) -> IO(Unit):
+def keep(fuel: Nat, log: File, torn: Bool, store: St.Store, +admin: Maybe<&2, String>, +jobs: Chan(Job())) -> IO(Unit):
   match fuel:
     case 0n:
       File.close(log)
     case 1n+rest:
       IO.bind(Maybe<&1, Job()>, Unit, Chan.recv(Job(), jobs),
-        got => took(got, log, torn, store, l => t => s => keep(rest, l, t, s, jobs)))
+        got => took(got, log, torn, store, admin, l => t => s => keep(rest, l, t, s, admin, jobs)))
 
 # Connections
 # -----------
@@ -248,17 +286,27 @@ def snap.recs(fuel: Nat, f: File, rs: List<&2, St.Rec>) -> IO(Unit):
     case 1n+k Con{r, rest}:
       IO.bind(Wrote(), Unit, File.write(f, St.Rec.line(r)), w => snap.next(w, g => snap.recs(k, g, rest)))
 
-def snapshot.opened(o: Result<&1, &1, U32 & String, File>, head: String, +rs: List<&2, St.Rec>) -> IO(Unit):
+# The organizations, then the records.
+def snap.orgs(fuel: Nat, f: File, gs: List<&2, St.Org>, +rs: List<&2, St.Rec>) -> IO(Unit):
+  match fuel gs:
+    case 0n _:
+      snap.recs(List.length(&2, St.Rec, rs), f, rs)
+    case 1n+k Nil{}:
+      snap.recs(List.length(&2, St.Rec, rs), f, rs)
+    case 1n+k Con{g, rest}:
+      IO.bind(Wrote(), Unit, File.write(f, St.Org.line(g)), w => snap.next(w, h => snap.orgs(k, h, rest, rs)))
+
+def snapshot.opened(o: Result<&1, &1, U32 & String, File>, head: String, +gs: List<&2, St.Org>, rs: List<&2, St.Rec>) -> IO(Unit):
   match o:
     case Fail{e}:
       IO.print_err("cloverleaf web: the snapshot could not be opened")
     case Done{f}:
-      IO.bind(Wrote(), Unit, File.write(f, head), w => snap.next(w, g => snap.recs(List.length(&2, St.Rec, rs), g, rs)))
+      IO.bind(Wrote(), Unit, File.write(f, head), w => snap.next(w, g => snap.orgs(List.length(&2, St.Org, gs), g, gs, rs)))
 
 def snapshot.write(newer: Bool, path: String, n: Nat, +store: St.Store) -> IO(Unit):
   match newer:
     case True{}:
-      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open(path, "w"), o => snapshot.opened(o, St.Snapshot.head(n, store), St.Store.recs(store)))
+      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open(path, "w"), o => snapshot.opened(o, St.Snapshot.head(n, store), St.Store.orgs(store), St.Store.recs(store)))
     case False{}:
       IO.pure(Unit, Unit{})
 
@@ -275,46 +323,46 @@ def mend(torn: Bool, log: File) -> IO(File):
     case False{}:
       IO.pure(File, log)
 
-def run(+jobs: Chan(Job()), log: File, store: St.Store) -> IO(Unit):
+def run(+jobs: Chan(Job()), log: File, store: St.Store, admin: Maybe<&2, String>) -> IO(Unit):
   do IO<Unit>:
-    IO.spawn(Unit, keep(4000000000n, log, False{}, store, jobs))
+    IO.spawn(Unit, keep(4000000000n, log, False{}, store, admin, jobs))
     listener : Listener <- IO.try(Listener, TCP.listen("0.0.0.0", 8080))
     IO.print("cloverleaf web listening on 8080")
     serve(4000000000n, listener, jobs)
 
-def serving(log: File, store: St.Store) -> IO(Unit):
+def serving(log: File, store: St.Store, admin: Maybe<&2, String>) -> IO(Unit):
   do IO<Unit>:
     jobs : Chan(Job()) <- Chan.new(Job(), 1024)
-    run(jobs, log, store)
+    run(jobs, log, store, admin)
 
-def mended(+dir: String, +skip: Nat, torn: Bool, +r: St.Replay) -> IO(Unit):
+def mended(+dir: String, +skip: Nat, torn: Bool, +r: St.Replay, admin: Maybe<&2, String>) -> IO(Unit):
   do IO<Unit>:
     IO.print("cloverleaf web: " ++ Nat.show(St.Replay.lines(r)) ++ " log lines, " ++ Nat.show(skip) ++ " from the snapshot, "
       ++ Nat.show(St.Replay.bad(r)) ++ " not a change")
     log : File <- IO.try(File, File.open(dir ++ "/events.log", "a"))
     mended : File <- mend(torn, log)
     snapshot.write(Nat.is_lt(skip, St.Replay.lines(r)), dir ++ "/snapshot.jsonl", St.Replay.lines(r), St.Replay.store(r))
-    serving(mended, St.Replay.store(r))
+    serving(mended, St.Replay.store(r), admin)
 
-def resumed(+dir: String, +skip: Nat, +r: St.Replay) -> IO(Unit):
-  mended(dir, skip, St.Replay.torn(r), St.Replay.finish(r))
+def resumed(+dir: String, +skip: Nat, +r: St.Replay, admin: Maybe<&2, String>) -> IO(Unit):
+  mended(dir, skip, St.Replay.torn(r), St.Replay.finish(r), admin)
 
-def resume(+dir: String, +skip: Nat, s: St.Store) -> IO(Unit):
+def resume(+dir: String, +skip: Nat, s: St.Store, admin: Maybe<&2, String>) -> IO(Unit):
   do IO<Unit>:
     r : St.Replay <- read_log(dir ++ "/events.log", St.Replay.start(skip, s))
-    resumed(dir, skip, r)
+    resumed(dir, skip, r, admin)
 
-def begin(+dir: String, m: Maybe<&2, St.Snap>) -> IO(Unit):
+def begin(+dir: String, m: Maybe<&2, St.Snap>, admin: Maybe<&2, String>) -> IO(Unit):
   match m:
     case None{}:
-      resume(dir, 0n, St.Store.empty())
+      resume(dir, 0n, St.Store.empty(), admin)
     case Some{St.Snap{n, s}}:
-      resume(dir, n, s)
+      resume(dir, n, s, admin)
 
-def start(+dir: String) -> IO(Unit):
+def start(+dir: String, admin: Maybe<&2, String>) -> IO(Unit):
   do IO<Unit>:
     snap : St.Load <- read_snapshot(dir ++ "/snapshot.jsonl")
-    begin(dir, St.Load.finish(snap))
+    begin(dir, St.Load.finish(snap), admin)
 
 def data_dir(r: Result<&1, &1, U32 & String, String>) -> String:
   match r:
@@ -323,7 +371,27 @@ def data_dir(r: Result<&1, &1, U32 & String, String>) -> String:
     case Fail{e}:
       "/data"
 
+def admin.key(r: Result<&1, &1, U32 & String, String>) -> Maybe<&2, String>:
+  match r:
+    case Done{k}:
+      Api.Api.admin(k)
+    case Fail{e}:
+      None{}
+
+def admin.warn(m: Maybe<&2, String>) -> IO(Unit):
+  match m:
+    case Some{h}:
+      IO.pure(Unit, Unit{})
+    case None{}:
+      IO.print_err("cloverleaf web: CLOVERLEAF_ADMIN_KEY is unset, or isn't at least 32 printable ASCII characters with no spaces, so no organization can be added")
+
+def admin.then(+admin: Maybe<&2, String>, dir: String) -> IO(Unit):
+  do IO<Unit>:
+    admin.warn(admin)
+    start(dir, admin)
+
 def main() -> IO(Unit):
   do IO<Unit>:
     env : Result<&1, &1, U32 & String, String> <- IO.get_env("CLOVERLEAF_DATA")
-    start(data_dir(env))
+    key : Result<&1, &1, U32 & String, String> <- IO.get_env("CLOVERLEAF_ADMIN_KEY")
+    admin.then(admin.key(key), data_dir(env))

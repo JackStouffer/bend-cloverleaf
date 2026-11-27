@@ -169,7 +169,7 @@ Compose runs the app the way a real deployment would, so nothing talks to the ba
 - **Development:** `docker compose -f compose.yaml -f compose.dev.yaml watch` keeps the same nginx and TLS path, swaps in Vite, and rebuilds the backend on change.
 - **Images:** `backend/Dockerfile` builds from the repo root into three images, `web`, `road` and `solver`, and fails if `bend PROOF.bend`, the Bend checks or the scenarios fail. All three have built and run on Docker Desktop, and the national solve ran in the `solver` image under its 2GB cap. `web` and `nginx` have run together under Compose in a Linux sandbox, where the contract and crash tests passed through nginx. The `road` image wasn't built there, because it needs the 30GB data rebuild.
 - **Certificates:** nginx creates a self-signed certificate in a Docker volume on first start. No key is ever committed.
-- **Secrets:** later secrets come from a gitignored `.env` file, never from the images or Compose files.
+- **Secrets:** come from a gitignored `.env` file, never from the images or Compose files. The first is `CLOVERLEAF_ADMIN_KEY`, which Compose passes to the web process.
 - **Backend protection:** nginx buffers requests and limits body size, so slow or oversized clients never reach Bend's event loop. Server-Sent Events will need a route with buffering turned off.
 - **Road data:** part of the `road` image, at `/road/<state>`. A plain `docker build` fetches the US extract and rebuilds the data from scratch, as a deployed image should. Local Compose runs set `ROAD_DATA=local` and copy the cached, gitignored `data/road` instead, which takes about 30 seconds instead of half an hour. The image is about 10GB.
 
@@ -196,7 +196,7 @@ An API change is a Bend change. If the frontend's use of the API no longer match
 
 `openapi.json` and the generated types are committed, and the check regenerates them and fails on any difference. A change to the API therefore always shows up in review.
 
-Built so far: request bodies, path parameters, error responses, optional fields, enums and named components. Still to build: query parameters and auth schemes.
+Built so far: request bodies, path parameters, error responses, optional fields, enums, named components, and Bearer auth schemes with each route's security and its 401 and 403. Still to build: query parameters.
 
 Live updates use Server-Sent Events, which `openapi-fetch` doesn't handle. Event payloads are still schemas in the route table, and a small typed wrapper around `EventSource` consumes them.
 
@@ -304,9 +304,14 @@ Road times use the same idea as `publish`. The search isn't proven to find anyth
 
 Healing is proven by construction: every edit rebuilds the route through `Route.remake`, so no runtime guard is involved, apart from the check that a reorder holds the same stops. The planner is the opposite. It isn't proven to build a valid plan. `publish` runs the proven checker on the result and falls back to the trivial plan, so what leaves is always valid, but a planner bug would show up as an empty plan instead of a failed proof.
 
+- A dealer route lets a caller through only as the dealer organization whose stored hash matches its key, an admin route only the admin, and a request with no key is a 401. With no admin key set, no key is the admin's.
+- A dealer's reads, cancels and repeated keys find only that dealer's own appraisals, and a new request is logged as the caller's.
+- Adding an organization with a bad name writes nothing and answers 422. A good name logs the key's hash, never the key, and answers 201 with the key, and that hash signs in as the new organization.
+
 Still to prove:
 
-- Tenant isolation and role permissions hold for every request.
+- Role permissions hold for every request, once people sign in with roles.
+- That the stored hash is the SHA-256 of the answered key. The checker can't unfold the hash on an unknown key, so the laws take the hash as given and scenarios and `scripts/sha256.test.mjs` check it.
 
 Not proven:
 
@@ -359,7 +364,7 @@ Synthetic data generator, one nightly multi-day solve per state, contractor assi
 HTTP/1.1, JSON, the route table and schema-driven codecs, the OpenAPI generator, event log and snapshots, password and API-key auth, the external API, organizations and roles, and process wiring. Also adds the generated client and contract tests to the existing frontend project, so the contract is proven end to end before the UI is built.
 
 **Done when:** simulated dealer clients can create, read and cancel requests using the generated spec, real responses pass contract tests, a breaking API change fails `tsc`, data survives a crash, and tenant isolation is proven.
-**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. Dealers can create, read and cancel appraisals, with request bodies, path parameters and enums, on an append-only event log with snapshots. Contract tests check real responses through nginx against the spec, and the data survives the web process being killed. Still to come: query parameters, auth schemes, auth, organizations and roles, tenant isolation, the external API, and serving `openapi.json`.
+**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. Dealers can create, read and cancel appraisals, with request bodies, path parameters and enums, on an append-only event log with snapshots. Contract tests check real responses through nginx against the spec, and the data survives the web process being killed. Dealer organizations have API keys, an admin key adds them, and tenant isolation is proven for every dealer request. Still to come: query parameters, password auth and sessions for people, roles, revoking and rotating organization keys, the external API, and serving `openapi.json`.
 
 ### 5. Geocoding (M)
 
@@ -524,6 +529,47 @@ Some injected bugs were caught because a proof script stopped matching the code,
 **Friction**
 
 - **Parallel reads:** an array has one owner, so lanes can't share a read-only graph without `@unsafe`. Copying it is the largest memory cost in the road search.
+
+### Milestone 4 organizations and API keys
+
+**What was built**
+
+- `POST /api/v1/organizations`, which takes the admin key and a `NewOrganization` name, and answers `OrganizationKey`: the id (`o1`, `o2` and on), the name and an API key, shown once. Every appraisal route now takes a dealer key, and `Appraisal` names its `organization`.
+- `web/sha256.bend`: SHA-256, pure. Base has no crypto. The store keeps only each key's hash, and a request's key is hashed and looked up.
+- `web/api.bend`: each route has an auth rule, `Open`, `Dealers` or `Admins`. The gate runs before the body is read. No key, or one nobody has, is a 401 with `WWW-Authenticate: Bearer`, and a key for the other kind of route is a 403. Lookups take the caller's organization, so another dealer's appraisal reads as 404, and idempotency keys are per organization. A key is `clv_` and 64 hex digits from 32 bytes of `/dev/urandom`.
+- `web/store.bend`: an `organized` change in the log, organizations in the store and the snapshot, ahead of the appraisals.
+- `web/openapi.bend`: `dealerKey` and `adminKey` Bearer schemes, each operation's `security`, and its 401 and 403.
+- `web/main.bend`: reads `CLOVERLEAF_ADMIN_KEY` at startup and keeps only its hash. A key that isn't at least 32 printable ASCII characters with no spaces sets no admin, and the process says so on stderr. Only a request to add an organization reads `/dev/urandom`.
+- `scripts/contract.mjs`: adds two organizations each run and checks the gate and that neither sees the other's appraisals. `scripts/sha256.test.mjs` checks the hash against Node's.
+
+The log and snapshot formats changed. A store from before this slice loads as empty: its old lines don't decode and are skipped, its appraisals are dropped, and ids start again at `a1`. There was no deployed data, and the README says to clear the appraisals volume when upgrading.
+
+A lost answer to `POST /api/v1/organizations` leaves a key nobody holds. The change is logged before the 201 is sent, so a retry adds a second organization, and the first key still works. Only a key's hash is stored, so a retry can't send it again. The fix is revoking and rotating keys, which is still to come.
+
+**Proof effort**
+
+| Measure | Result |
+|---|---|
+| Laws | 23 new, in 207 lines. Three cancel laws gained the record's new owner field, with the same conclusions |
+| Web code | 4,252 lines, of which 3,865 are pure |
+| Proofs | 560 lines and 43 defs in the new `proof/auth.bend`, 25 lines changed in `proof/store.bend` |
+| Checking everything | about 4.5s |
+| Scenarios | 33 new, and every existing web scenario now sends a key |
+| `@unsafe` or foreign code | None new |
+| `--verdict` | Not run: Lean isn't installed in this environment |
+
+The gate laws are a match and `{==}`. Isolation needed short inductions over the store's lists: a lookup by organization and id finds a record only when both match, which a pick lemma states and the induction carries. Mutual recursion is banned, so each induction passes its hypothesis as a lambda into a non-recursive pick lemma. Adding the owner field to records rippled into 3 existing laws, their proofs and 25 lines of `proof/store.bend`. No other law changed.
+
+**Bugs**
+
+Proofs caught none in the code as written. Writing the contract run turned up a spec gap: the gate's 401 and 403 were covered only by the catch-all `4XX`, so they're now published on each route that needs a key.
+
+**Friction**
+
+- **Checker stack:** any law that makes the checker unfold `Sha.text` on an unknown string overflows its stack, even when the hash only needs to be carried along. The laws are stated over the hash instead, the handler is given the hash already computed, and the link between key and hash is left to scenarios and a Node test. This is the second checker-stack workaround, after the 14-digit limit.
+- **No crypto or randomness in Base:** SHA-256 took 155 lines. Random bytes come from reading `/dev/urandom` as a file, which works on Linux only.
+- **Wide records:** adding one field to `Rec` and `Store` meant touching every pattern match on them, in code, laws and proofs. Base has no record update syntax.
+- **Good:** one `Auth` field on the route drove the gate, the spec's security and the published 401 and 403 together, so they can't disagree.
 
 ### Milestone 4 appraisal requests
 

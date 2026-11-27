@@ -9,6 +9,7 @@
       "get": {
         "operationId": "getHealth",
         "summary": "Whether the web process is up",
+        "security": [],
         "responses": {
           "200": {
             "description": "The web process is up",
@@ -37,6 +38,11 @@
       "post": {
         "operationId": "createAppraisal",
         "summary": "Request an appraisal. Sending the same key again is safe",
+        "security": [
+          {
+            "dealerKey": []
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -78,6 +84,26 @@
               }
             }
           },
+          "401": {
+            "description": "No key, or a key nobody has",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A key for the other kind of route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "4XX": {
             "description": "The request was refused",
             "content": {
@@ -104,7 +130,12 @@
     "/api/v1/appraisals/{id}": {
       "get": {
         "operationId": "getAppraisal",
-        "summary": "Read an appraisal",
+        "summary": "Read one of your organization's appraisals",
+        "security": [
+          {
+            "dealerKey": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -127,7 +158,27 @@
             }
           },
           "404": {
-            "description": "No appraisal has this id",
+            "description": "Your organization has no appraisal with this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No key, or a key nobody has",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A key for the other kind of route",
             "content": {
               "application/json": {
                 "schema": {
@@ -152,7 +203,12 @@
     "/api/v1/appraisals/{id}/cancel": {
       "post": {
         "operationId": "cancelAppraisal",
-        "summary": "Cancel an appraisal. Cancelling one that's already cancelled changes nothing",
+        "summary": "Cancel one of your organization's appraisals. Cancelling one that's already cancelled changes nothing",
+        "security": [
+          {
+            "dealerKey": []
+          }
+        ],
         "parameters": [
           {
             "name": "id",
@@ -175,7 +231,7 @@
             }
           },
           "404": {
-            "description": "No appraisal has this id",
+            "description": "Your organization has no appraisal with this id",
             "content": {
               "application/json": {
                 "schema": {
@@ -186,6 +242,109 @@
           },
           "409": {
             "description": "The appraisal is underway or completed, so it can't be cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No key, or a key nobody has",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A key for the other kind of route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The request was refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "5XX": {
+            "description": "The change could not be saved, so nothing changed and the request can be sent again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/organizations": {
+      "post": {
+        "operationId": "createOrganization",
+        "summary": "Add a dealer organization and issue its API key, which is shown only in this answer",
+        "security": [
+          {
+            "adminKey": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrganization"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The organization was added. Keep apiKey: it can't be read again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationKey"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The name breaks a rule, which error names",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No key, or a key nobody has",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "A key for the other kind of route",
             "content": {
               "application/json": {
                 "schema": {
@@ -319,6 +478,9 @@
           "id": {
             "type": "string"
           },
+          "organization": {
+            "type": "string"
+          },
           "key": {
             "type": "string"
           },
@@ -340,6 +502,7 @@
         },
         "required": [
           "id",
+          "organization",
           "key",
           "address",
           "zip",
@@ -373,6 +536,50 @@
           "error"
         ],
         "additionalProperties": false
+      },
+      "NewOrganization": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "OrganizationKey": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "apiKey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "apiKey"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "dealerKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A dealer organization's API key, issued when an admin adds the organization. It reaches only that organization's appraisals"
+      },
+      "adminKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The admin key, set as CLOVERLEAF_ADMIN_KEY in the web process's environment"
       }
     }
   }

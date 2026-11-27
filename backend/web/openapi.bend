@@ -111,7 +111,7 @@ def Spec.walk(routes: List<&2, A.Route>, acc: List<&2, S.Schema>) -> List<&2, S.
   match routes:
     case Nil{}:
       acc
-    case Con{A.Route{m, p, i, sum, b, w, as}, rest}:
+    case Con{A.Route{m, p, i, sum, b, w, u, as}, rest}:
       Spec.walk(rest, Spec.answers(as, Spec.body(b, acc)))
 
 # Every object the table uses, in order of first use, repeats included. The
@@ -195,13 +195,24 @@ def Spec.unsaved(writes: Bool) -> J.Json:
     case False{}:
       J.JNil{}
 
-# The route's own answers, then the dispatcher's errors, then the shell's.
-def Spec.responses(+writes: Bool, as: List<&2, A.Answer>) -> J.Json:
+# A route that needs a key answers 401 without one and 403 with the other
+# kind. The gate sends both before the route's own handler runs.
+def Spec.denials(u: A.Auth, rest: J.Json) -> J.Json:
+  match u:
+    case A.Open{}:
+      rest
+    case other:
+      J.JField{"401", Spec.response("No key, or a key nobody has", A.Schemas.error()),
+        J.JField{"403", Spec.response("A key for the other kind of route", A.Schemas.error()), rest}}
+
+# The route's own answers, then the gate's and the dispatcher's errors, then
+# the shell's.
+def Spec.responses(+writes: Bool, u: A.Auth, as: List<&2, A.Answer>) -> J.Json:
   match as:
     case Nil{}:
-      J.JField{"4XX", Spec.response("The request was refused", A.Schemas.error()), Spec.unsaved(writes)}
+      Spec.denials(u, J.JField{"4XX", Spec.response("The request was refused", A.Schemas.error()), Spec.unsaved(writes)})
     case Con{A.Answer{st, d, s}, rest}:
-      J.JField{Nat.show(A.Status.code(st)), Spec.response(d, s), Spec.responses(writes, rest)}
+      J.JField{Nat.show(A.Status.code(st)), Spec.response(d, s), Spec.responses(writes, u, rest)}
 
 # A path segment {name} without its braces.
 def Spec.param.name(+seg: String) -> String:
@@ -245,13 +256,27 @@ def Spec.request(b: Maybe<&2, S.Schema>, rest: J.Json) -> J.Json:
     case Some{s}:
       J.JField{"requestBody", J.JObj{J.JField{"required", J.JBool{True{}}, J.JField{"content", Spec.content(s), J.JNil{}}}}, rest}
 
+def Spec.scheme(name: String) -> J.Json:
+  J.JArr{J.JCons{Spec.obj1(name, J.JArr{J.JNil{}}), J.JNil{}}}
+
+# The key a route needs. An open route lists no scheme, so it needs none.
+def Spec.security(u: A.Auth) -> J.Json:
+  match u:
+    case A.Open{}:
+      J.JArr{J.JNil{}}
+    case A.Dealers{}:
+      Spec.scheme("dealerKey")
+    case A.Admins{}:
+      Spec.scheme("adminKey")
+
 def Spec.operation(r: A.Route) -> J.Json:
   match r:
-    case A.Route{m, p, i, sum, b, w, as}:
+    case A.Route{m, p, i, sum, b, w, +u, as}:
       J.JObj{J.JField{"operationId", J.JStr{i},
         J.JField{"summary", J.JStr{sum},
-          Spec.params(p, Spec.request(b,
-            J.JField{"responses", J.JObj{Spec.responses(w, as)}, J.JNil{}}))}}}
+          J.JField{"security", Spec.security(u),
+            Spec.params(p, Spec.request(b,
+              J.JField{"responses", J.JObj{Spec.responses(w, u, as)}, J.JNil{}}))}}}}
 
 def Spec.method.pick(same: Bool, +r: A.Route, rest: J.Json) -> J.Json:
   match same:
@@ -300,11 +325,21 @@ def Spec.items(ps: List<&2, String>, +routes: List<&2, A.Route>) -> J.Json:
 # The document
 # ------------
 
+def Spec.bearer(d: String) -> J.Json:
+  J.JObj{J.JField{"type", J.JStr{"http"}, J.JField{"scheme", J.JStr{"bearer"}, J.JField{"description", J.JStr{d}, J.JNil{}}}}}
+
+# Both kinds of key go in an Authorization: Bearer header. A missing or
+# unknown key gets a 401, and a key for the other kind of route a 403.
+def Spec.schemes() -> J.Json:
+  J.JObj{J.JField{"dealerKey", Spec.bearer("A dealer organization's API key, issued when an admin adds the organization. It reaches only that organization's appraisals"),
+    J.JField{"adminKey", Spec.bearer("The admin key, set as CLOVERLEAF_ADMIN_KEY in the web process's environment"), J.JNil{}}}}
+
 def Spec.doc(+routes: List<&2, A.Route>) -> J.Json:
   J.JObj{J.JField{"openapi", J.JStr{"3.1.0"},
     J.JField{"info", J.JObj{J.JField{"title", J.JStr{"Cloverleaf API"}, J.JField{"version", J.JStr{"0.1.0"}, J.JNil{}}}},
       J.JField{"paths", J.JObj{Spec.items(Spec.paths(routes, []), routes)},
-        J.JField{"components", Spec.obj1("schemas", J.JObj{Spec.components(Spec.unique(Spec.all(routes), []))}), J.JNil{}}}}}}
+        J.JField{"components", J.JObj{J.JField{"schemas", J.JObj{Spec.components(Spec.unique(Spec.all(routes), []))},
+          J.JField{"securitySchemes", Spec.schemes(), J.JNil{}}}}, J.JNil{}}}}}}
 
 def Spec.text() -> String:
   J.Json.pretty(Spec.doc(A.Api.routes(A.Api.ops())), 0n, "")

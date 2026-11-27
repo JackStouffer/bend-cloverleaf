@@ -55,7 +55,7 @@ law put_finds:
 
 def put_finds(r, s):
   match s:
-    case St.Store{n, rs}:
+    case St.Store{n, rs, m, gs}:
       %Equal.sym(Bool, J.Text.same(St.Rec.id(r), St.Rec.id(r)), True{}, PW.same_refl(St.Rec.id(r))) : {St.Store.find.pick(_, r, St.Store.find(St.Rec.id(r), rs)) == Some{r} : MS()}
       {==}
 
@@ -106,8 +106,17 @@ law rec_back:
 
 def rec_back(r):
   match r:
-    case St.Rec{i, k, a, z, st, d, s}:
-      %Equal.sym(T.Status, St.Status.of(St.Status.tag(s)), s, status_back(s)) : {St.Rec{i, k, a, z, st, d, _} == St.Rec{i, k, a, z, st, d, s} : St.Rec}
+    case St.Rec{i, o, k, a, z, st, d, s}:
+      %Equal.sym(T.Status, St.Status.of(St.Status.tag(s)), s, status_back(s)) : {St.Rec{i, o, k, a, z, st, d, _} == St.Rec{i, o, k, a, z, st, d, s} : St.Rec}
+      {==}
+
+law org_back:
+  for +g: St.Org
+  {St.Org.of(St.Org.value(g)) == g : St.Org}
+
+def org_back(g):
+  match g:
+    case St.Org{i, n, h}:
       {==}
 
 def EV() -> Data:
@@ -127,6 +136,11 @@ def change_back(e):
     case St.Cancelled{i}:
       %Equal.sym(EV(), S.decode(St.Schemas.event(), S.encode(St.Schemas.event(), St.Change.value(St.Cancelled{i}))), Some{St.Change.value(St.Cancelled{i})},
         PW.roundtrip(St.Schemas.event(), St.Change.value(St.Cancelled{i}), {==}, PW.within_free(St.Schemas.event(), St.Change.value(St.Cancelled{i}), {==}))) : {St.Change.found(_) == Some{St.Cancelled{i}} : MC()}
+      {==}
+    case St.Organized{g}:
+      %Equal.sym(EV(), S.decode(St.Schemas.event(), S.encode(St.Schemas.event(), St.Change.value(St.Organized{g}))), Some{St.Change.value(St.Organized{g})},
+        PW.roundtrip(St.Schemas.event(), St.Change.value(St.Organized{g}), {==}, PW.within_free(St.Schemas.event(), St.Change.value(St.Organized{g}), {==}))) : {St.Change.found(_) == Some{St.Organized{g}} : MC()}
+      %Equal.sym(St.Org, St.Org.of(St.Org.value(g)), g, org_back(g)) : {Some{St.Organized{_}} == Some{St.Organized{g}} : MC()}
       {==}
 
 # Handlers
@@ -183,18 +197,18 @@ law locked_appraisal_isnt_cancelled:
 
 def locked_appraisal_isnt_cancelled(r, e):
   match r:
-    case St.Rec{i, k, a, z, st, d, s}:
+    case St.Rec{i, o, k, a, z, st, d, s}:
       match s:
         case T.Underway{}:
           {==}
         case T.Completed{}:
           {==}
         case T.Open{}:
-          L.never({A.Api.change(A.Cancel{Some{St.Rec{i, k, a, z, st, d, T.Open{}}}}) == None{} : MC()}, e)
+          L.never({A.Api.change(A.Cancel{Some{St.Rec{i, o, k, a, z, st, d, T.Open{}}}}) == None{} : MC()}, e)
         case T.Failed{}:
-          L.never({A.Api.change(A.Cancel{Some{St.Rec{i, k, a, z, st, d, T.Failed{}}}}) == None{} : MC()}, e)
+          L.never({A.Api.change(A.Cancel{Some{St.Rec{i, o, k, a, z, st, d, T.Failed{}}}}) == None{} : MC()}, e)
         case T.Cancelled{}:
-          L.never({A.Api.change(A.Cancel{Some{St.Rec{i, k, a, z, st, d, T.Cancelled{}}}}) == None{} : MC()}, e)
+          L.never({A.Api.change(A.Cancel{Some{St.Rec{i, o, k, a, z, st, d, T.Cancelled{}}}}) == None{} : MC()}, e)
 
 law locked_appraisal_is_a_conflict:
   for +r: St.Rec
@@ -203,15 +217,15 @@ law locked_appraisal_is_a_conflict:
 
 def locked_appraisal_is_a_conflict(r, e):
   match r:
-    case St.Rec{i, k, a, z, st, d, s}:
+    case St.Rec{i, o, k, a, z, st, d, s}:
       match s:
         case T.Underway{}:
           {==}
         case T.Completed{}:
           {==}
         case T.Open{}:
-          L.never({A.Op.status(A.Cancel{Some{St.Rec{i, k, a, z, st, d, T.Open{}}}}) == 409n : Nat}, e)
+          L.never({A.Op.status(A.Cancel{Some{St.Rec{i, o, k, a, z, st, d, T.Open{}}}}) == 409n : Nat}, e)
         case T.Failed{}:
-          L.never({A.Op.status(A.Cancel{Some{St.Rec{i, k, a, z, st, d, T.Failed{}}}}) == 409n : Nat}, e)
+          L.never({A.Op.status(A.Cancel{Some{St.Rec{i, o, k, a, z, st, d, T.Failed{}}}}) == 409n : Nat}, e)
         case T.Cancelled{}:
-          L.never({A.Op.status(A.Cancel{Some{St.Rec{i, k, a, z, st, d, T.Cancelled{}}}}) == 409n : Nat}, e)
+          L.never({A.Op.status(A.Cancel{Some{St.Rec{i, o, k, a, z, st, d, T.Cancelled{}}}}) == 409n : Nat}, e)

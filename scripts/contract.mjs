@@ -9,13 +9,56 @@
 // --keep and --recall make the crash test: keep, kill the web process, wait
 // for it to come back, recall. The CA is the stack's own certificate, copied
 // out with `docker compose cp nginx:/etc/nginx/certs/tls.crt data/tls.crt`.
+//
+// The admin key comes from CLOVERLEAF_ADMIN_KEY, or else from the repo's .env,
+// the file Compose gives the web process. The contract adds two organizations
+// with it each run. --keep writes one of their keys to the file it keeps, so
+// keep that file out of the repo, as data/ is.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { request } from "node:https";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const SPEC = fileURLToPath(new URL("../backend/openapi.json", import.meta.url));
+const ENV = fileURLToPath(new URL("../.env", import.meta.url));
+
+// The value of name in a .env file's text: KEY=value lines, with # comments and
+// optional quotes around the value.
+export function envValue(text, name) {
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (!m || m[1] !== name) continue;
+    const v = m[2];
+    const quoted = v.match(/^(["'])(.*?)\1(?:\s+#.*)?$/);
+    return quoted ? quoted[2] : v.replace(/\s+#.*$/, "");
+  }
+  return undefined;
+}
+
+// The shell's value wins, so the contract can run against another stack. When
+// it differs from .env, a local run would fail on its admin key, so say so,
+// without printing either key.
+function adminKey() {
+  const fromEnv = process.env.CLOVERLEAF_ADMIN_KEY;
+  const fromFile = existsSync(ENV) ? envValue(readFileSync(ENV, "utf8"), "CLOVERLEAF_ADMIN_KEY") : undefined;
+  if (fromEnv && fromFile !== undefined && fromEnv !== fromFile) {
+    console.error("note: CLOVERLEAF_ADMIN_KEY in the shell differs from .env; using the shell's");
+  }
+  return fromEnv || fromFile;
+}
+
+// The problem with a keep file, or undefined when it has the shape --keep writes.
+export function keptProblem(kept) {
+  const ok =
+    kept !== null &&
+    typeof kept === "object" &&
+    typeof kept.key === "string" &&
+    typeof kept.other === "string" &&
+    Array.isArray(kept.appraisals) &&
+    kept.appraisals.every((a) => a !== null && typeof a === "object" && typeof a.id === "string");
+  return ok ? undefined : "the keep file is from an older contract run: make it again with --keep";
+}
 
 // The problems with value under schema, as paths and messages. The spec uses a
 // small part of JSON Schema: $ref, object with required and closed
@@ -109,22 +152,25 @@ export function conforms(spec, method, path, status, contentType, body) {
   return validate(spec, schema, json).map((p) => `${method} ${path} ${status}: ${p}`);
 }
 
-function send(base, ca, method, path, body) {
+function send(base, ca, method, path, body, key) {
   const url = new URL(path, base);
   const data = body === undefined ? undefined : Buffer.from(body);
+  const headers = data ? { "content-type": "application/json", "content-length": data.length } : {};
+  if (key !== undefined) headers.authorization = `Bearer ${key}`;
   return new Promise((resolve, reject) => {
     const req = request(
       url,
-      {
-        method,
-        ca,
-        headers: data ? { "content-type": "application/json", "content-length": data.length } : {},
-      },
+      { method, ca, headers },
       (res) => {
         const chunks = [];
         res.on("data", (c) => chunks.push(c));
         res.on("end", () =>
-          resolve({ status: res.statusCode, type: res.headers["content-type"], text: Buffer.concat(chunks).toString("utf8") }),
+          resolve({
+            status: res.statusCode,
+            type: res.headers["content-type"],
+            auth: res.headers["www-authenticate"],
+            text: Buffer.concat(chunks).toString("utf8"),
+          }),
         );
       },
     );
@@ -138,16 +184,18 @@ function draft(key, overrides = {}) {
   return { key, address: "100 Congress Ave", zip: "78701", state: "TX", due: "2026-12-15", ...overrides };
 }
 
-export async function run(base, ca, keep) {
+export async function run(base, ca, keep, admin = adminKey()) {
   const spec = JSON.parse(readFileSync(SPEC, "utf8"));
   const problems = [];
   let calls = 0;
-  const call = async (method, path, body, expect) => {
+  if (!admin) return { calls, problems: ["no admin key: set CLOVERLEAF_ADMIN_KEY, or put it in .env for Compose"] };
+  const call = async (method, path, body, expect, key) => {
     const text = body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body);
-    const res = await send(base, ca, method, path, text);
+    const res = await send(base, ca, method, path, text, key);
     calls += 1;
     problems.push(...conforms(spec, method, path, res.status, res.type, res.text));
     if (expect !== undefined && res.status !== expect) problems.push(`${method} ${path}: expected ${expect}, got ${res.status}`);
+    if (res.status === 401 && res.auth !== "Bearer") problems.push(`${method} ${path}: a 401 without WWW-Authenticate: Bearer`);
     try {
       return { status: res.status, json: JSON.parse(res.text) };
     } catch {
@@ -162,53 +210,94 @@ export async function run(base, ca, keep) {
   const run = randomUUID().slice(0, 8);
   await call("GET", "/api/health", undefined, 200);
 
-  const first = await call("POST", "/api/v1/appraisals", draft(`${run}-1`), 201);
-  const again = await call("POST", "/api/v1/appraisals", draft(`${run}-1`), 200);
+  // Two dealer organizations, made fresh each run.
+  await call("POST", "/api/v1/organizations", { name: `Contract ${run} A` }, 401);
+  await call("POST", "/api/v1/organizations", { name: "" }, 422, admin);
+  await call("POST", "/api/v1/organizations", { title: "x" }, 400, admin);
+  const orgA = await call("POST", "/api/v1/organizations", { name: `Contract ${run} A` }, 201, admin);
+  const orgB = await call("POST", "/api/v1/organizations", { name: `Contract ${run} B` }, 201, admin);
+  const a = orgA.json?.apiKey;
+  const b = orgB.json?.apiKey;
+  if (!/^clv_[0-9a-f]{64}$/.test(a ?? "") || !/^clv_[0-9a-f]{64}$/.test(b ?? "")) problems.push("a new key isn't clv_ and 64 hex digits");
+  if (a === b) problems.push("two organizations got one key");
+  await call("POST", "/api/v1/organizations", { name: `Contract ${run} C` }, 403, a);
+
+  // The gate, before the body is read.
+  await call("POST", "/api/v1/appraisals", draft(`${run}-0`), 401);
+  await call("POST", "/api/v1/appraisals", "{", 401);
+  await call("POST", "/api/v1/appraisals", draft(`${run}-0`), 401, `clv_${"0".repeat(64)}`);
+  await call("POST", "/api/v1/appraisals", draft(`${run}-0`), 403, admin);
+
+  const first = await call("POST", "/api/v1/appraisals", draft(`${run}-1`), 201, a);
+  if (first.json?.organization !== orgA.json?.id) problems.push("a new appraisal doesn't name its organization");
+  const again = await call("POST", "/api/v1/appraisals", draft(`${run}-1`), 200, a);
   same("a repeated key answers the stored appraisal", again.json, first.json);
-  const second = await call("POST", "/api/v1/appraisals", draft(`${run}-2`, { address: "Café Ñandú, 3 Elm" }), 201);
+  const second = await call("POST", "/api/v1/appraisals", draft(`${run}-2`, { address: "Café Ñandú, 3 Elm" }), 201, a);
   if (second.json?.id === first.json?.id) problems.push("two keys got one id");
 
-  await call("POST", "/api/v1/appraisals", draft(`${run}-3`, { zip: "7870" }), 422);
-  await call("POST", "/api/v1/appraisals", draft(`${run}-3`, { due: "2026-02-31x" }), 422);
-  await call("POST", "/api/v1/appraisals", draft(`${run}-3`, { state: "HI" }), 400);
-  await call("POST", "/api/v1/appraisals", "{", 400);
-  await call("POST", "/api/v1/appraisals", { ...draft(`${run}-3`), extra: 1 }, 400);
+  await call("POST", "/api/v1/appraisals", draft(`${run}-3`, { zip: "7870" }), 422, a);
+  await call("POST", "/api/v1/appraisals", draft(`${run}-3`, { due: "2026-02-31x" }), 422, a);
+  await call("POST", "/api/v1/appraisals", draft(`${run}-3`, { state: "HI" }), 400, a);
+  await call("POST", "/api/v1/appraisals", "{", 400, a);
+  await call("POST", "/api/v1/appraisals", { ...draft(`${run}-3`), extra: 1 }, 400, a);
 
   const id = first.json?.id;
-  const read = await call("GET", `/api/v1/appraisals/${id}`, undefined, 200);
+  const read = await call("GET", `/api/v1/appraisals/${id}`, undefined, 200, a);
   same("an appraisal reads back as created", read.json, first.json);
-  await call("GET", "/api/v1/appraisals/nope", undefined, 404);
-  await call("DELETE", `/api/v1/appraisals/${id}`, undefined, 405);
+  await call("GET", `/api/v1/appraisals/${id}`, undefined, 401);
+  await call("GET", "/api/v1/appraisals/nope", undefined, 404, a);
+  await call("DELETE", `/api/v1/appraisals/${id}`, undefined, 405, a);
 
-  const cancelled = await call("POST", `/api/v1/appraisals/${id}/cancel`, undefined, 200);
+  // The other organization can't see or touch A's appraisals, and its keys are
+  // its own.
+  await call("GET", `/api/v1/appraisals/${id}`, undefined, 404, b);
+  await call("POST", `/api/v1/appraisals/${id}/cancel`, undefined, 404, b);
+  const theirs = await call("POST", "/api/v1/appraisals", draft(`${run}-1`), 201, b);
+  if (theirs.json?.id === id) problems.push("another organization's key reused A's appraisal");
+  if (theirs.json?.organization !== orgB.json?.id) problems.push("B's appraisal doesn't name B");
+
+  const cancelled = await call("POST", `/api/v1/appraisals/${id}/cancel`, undefined, 200, a);
   same("cancelling changes only the status", cancelled.json, { ...first.json, status: "cancelled" });
-  const twice = await call("POST", `/api/v1/appraisals/${id}/cancel`, undefined, 200);
+  const twice = await call("POST", `/api/v1/appraisals/${id}/cancel`, undefined, 200, a);
   same("cancelling twice changes nothing", twice.json, cancelled.json);
-  await call("POST", "/api/v1/appraisals/nope/cancel", undefined, 404);
+  await call("POST", "/api/v1/appraisals/nope/cancel", undefined, 404, a);
   await call("GET", "/api/nope", undefined, 404);
 
-  const after = await call("GET", `/api/v1/appraisals/${second.json?.id}`, undefined, 200);
+  const after = await call("GET", `/api/v1/appraisals/${second.json?.id}`, undefined, 200, a);
   same("the other appraisal is untouched", after.json, second.json);
+  const mine = await call("GET", `/api/v1/appraisals/${theirs.json?.id}`, undefined, 200, b);
+  same("B's appraisal is untouched", mine.json, theirs.json);
 
-  if (keep) writeFileSync(keep, JSON.stringify([cancelled.json, second.json], null, 2) + "\n");
+  if (keep) writeFileSync(keep, JSON.stringify({ key: a, other: b, appraisals: [cancelled.json, second.json] }, null, 2) + "\n");
   return { calls, problems };
 }
 
 export async function recall(base, ca, file) {
   const spec = JSON.parse(readFileSync(SPEC, "utf8"));
   const kept = JSON.parse(readFileSync(file, "utf8"));
+  const shape = keptProblem(kept);
+  if (shape) return { calls: 0, problems: [shape] };
   const problems = [];
-  for (const a of kept) {
-    const path = `/api/v1/appraisals/${a.id}`;
-    const res = await send(base, ca, "GET", path);
+  let calls = 0;
+  const get = async (path, key) => {
+    const res = await send(base, ca, "GET", path, undefined, key);
+    calls += 1;
     problems.push(...conforms(spec, "GET", path, res.status, res.type, res.text));
+    return res;
+  };
+  for (const a of kept.appraisals) {
+    const path = `/api/v1/appraisals/${a.id}`;
+    const res = await get(path, kept.key);
     if (res.status !== 200) problems.push(`${path}: expected 200, got ${res.status}`);
     else if (res.text !== JSON.stringify(a)) problems.push(`${path}: ${res.text} != ${JSON.stringify(a)}`);
+    const other = await get(path, kept.other);
+    if (other.status !== 404) problems.push(`${path} with the other organization's key: expected 404, got ${other.status}`);
   }
-  const fresh = await send(base, ca, "POST", "/api/v1/appraisals", JSON.stringify(draft(randomUUID().slice(0, 8))));
+  const fresh = await send(base, ca, "POST", "/api/v1/appraisals", JSON.stringify(draft(randomUUID().slice(0, 8))), kept.key);
+  calls += 1;
   if (fresh.status !== 201) problems.push(`a new request after the restart: expected 201, got ${fresh.status}`);
-  else if (kept.some((a) => a.id === JSON.parse(fresh.text).id)) problems.push("an id was reused after the restart");
-  return { calls: kept.length + 1, problems };
+  else if (kept.appraisals.some((a) => a.id === JSON.parse(fresh.text).id)) problems.push("an id was reused after the restart");
+  return { calls, problems };
 }
 
 async function main() {

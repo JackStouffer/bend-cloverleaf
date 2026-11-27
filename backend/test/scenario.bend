@@ -24,6 +24,7 @@ import ../web/api.bend as WA
 import ../web/openapi.bend as WO
 import ../web/store.bend as St
 import ../web/utf8.bend as U
+import ../web/sha256.bend as WH
 
 # Concrete runs through the core. The laws say what must always hold, and this
 # says the code does the useful thing on real numbers, which they don't cover.
@@ -751,8 +752,38 @@ def load_checks() -> List<&2, Check>:
 def web.head(status: String, length: String, extra: String) -> String:
   "HTTP/1.1 " ++ status ++ "\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: " ++ length ++ "\r\n" ++ extra ++ "\r\n"
 
+# Made-up keys for these scenarios. They unlock nothing anywhere else.
+def web.admin_key() -> String:
+  "scenario-admin-key-unlocks-nothing-01"
+
+def web.key1() -> String:
+  "clv_" ++ String.repeat("11", 32n)
+
+def web.key2() -> String:
+  "clv_" ++ String.repeat("22", 32n)
+
+def web.admin() -> Maybe<&2, String>:
+  WA.Api.admin(web.admin_key())
+
+def web.seed() -> List<&2, U32>:
+  List.replicate(U32, 32n, 171)
+
+# The key Key.of makes from web.seed(): 32 bytes of 0xab.
+def web.seeded() -> String:
+  "clv_" ++ String.repeat("ab", 32n)
+
+def web.org(id: String, name: String, key: String) -> St.Change:
+  St.Organized{St.Org{id, name, WH.Sha.text(key)}}
+
+# A store with two dealer organizations, o1 and o2, and no appraisals.
+def web.base() -> St.Store:
+  St.Store.apply(St.Store.apply(St.Store.empty(), web.org("o1", "Acme Appraisals", web.key1())), web.org("o2", "Birch Auto", web.key2()))
+
+def web.handle(+request: String, +s: St.Store) -> WA.Handled:
+  WA.Api.handle(request, s, web.admin(), web.seed())
+
 def web.is(request: String, response: String) -> Bool:
-  WJ.Text.same(WA.Handled.response(WA.Api.handle(request, St.Store.empty())), response)
+  WJ.Text.same(WA.Handled.response(web.handle(request, web.base())), response)
 
 # A JSON text reads and prints back unchanged.
 def web.echo.got(m: Maybe<&2, WJ.Json>, s: String) -> Bool:
@@ -793,22 +824,38 @@ def web.nat(n: Nat) -> Bool:
   Maybe.is_some(&2, Nat, WS.decode(WS.SNat{}, WJ.JNum{n}))
 
 # Appraisal requests, run against a store the way the web process runs them:
-# each change a response brings is applied before the next request.
+# each change a response brings is applied before the next request. They carry
+# o1's key unless they say otherwise.
+
+def web.bearer(key: String) -> String:
+  "Authorization: Bearer " ++ key ++ "\r\n"
+
+def web.post.as(auth: String, path: String, +body: String) -> String:
+  "POST " ++ path ++ " HTTP/1.1\r\n" ++ auth ++ "Content-Type: application/json\r\nContent-Length: " ++ Nat.show(WJ.Text.bytes(body, 0n)) ++ "\r\n\r\n" ++ body
 
 def web.post(path: String, +body: String) -> String:
-  "POST " ++ path ++ " HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: " ++ Nat.show(WJ.Text.bytes(body, 0n)) ++ "\r\n\r\n" ++ body
+  web.post.as(web.bearer(web.key1()), path, body)
+
+def web.get.as(auth: String, path: String) -> String:
+  "GET " ++ path ++ " HTTP/1.1\r\n" ++ auth ++ "\r\n"
 
 def web.get(path: String) -> String:
-  "GET " ++ path ++ " HTTP/1.1\r\n\r\n"
+  web.get.as(web.bearer(web.key1()), path)
 
 def web.draft(key: String, zip: String, state: String) -> String:
   "{\"key\":\"" ++ key ++ "\",\"address\":\"1 Main St\",\"zip\":\"" ++ zip ++ "\",\"state\":\"" ++ state ++ "\",\"due\":\"2026-12-01\"}"
 
+def web.create.as(auth: String, key: String) -> String:
+  web.post.as(auth, "/api/v1/appraisals", web.draft(key, "78701", "TX"))
+
 def web.create(key: String) -> String:
-  web.post("/api/v1/appraisals", web.draft(key, "78701", "TX"))
+  web.create.as(web.bearer(web.key1()), key)
+
+def web.rec.of(id: String, org: String, key: String, status: String) -> String:
+  "{\"id\":\"" ++ id ++ "\",\"organization\":\"" ++ org ++ "\",\"key\":\"" ++ key ++ "\",\"address\":\"1 Main St\",\"zip\":\"78701\",\"state\":\"TX\",\"due\":\"2026-12-01\",\"status\":\"" ++ status ++ "\"}"
 
 def web.rec(id: String, key: String, status: String) -> String:
-  "{\"id\":\"" ++ id ++ "\",\"key\":\"" ++ key ++ "\",\"address\":\"1 Main St\",\"zip\":\"78701\",\"state\":\"TX\",\"due\":\"2026-12-01\",\"status\":\"" ++ status ++ "\"}"
+  web.rec.of(id, "o1", key, status)
 
 def web.after(m: Maybe<&2, St.Change>, +s: St.Store) -> St.Store:
   match m:
@@ -818,7 +865,7 @@ def web.after(m: Maybe<&2, St.Change>, +s: St.Store) -> St.Store:
       St.Store.apply(s, c)
 
 def web.step(+s: St.Store, +request: String) -> St.Store:
-  web.after(WA.Handled.change(WA.Api.handle(request, s)), s)
+  web.after(WA.Handled.change(web.handle(request, s)), s)
 
 def web.run(rs: List<&2, String>, +s: St.Store) -> St.Store:
   match rs:
@@ -827,15 +874,18 @@ def web.run(rs: List<&2, String>, +s: St.Store) -> St.Store:
     case Con{r, rest}:
       web.run(rest, web.step(s, r))
 
-# The store after the requests rs, from an empty one.
+# The store after the requests rs, from the two organizations.
 def web.store(rs: List<&2, String>) -> St.Store:
-  web.run(rs, St.Store.empty())
+  web.run(rs, web.base())
+
+def web.answers.with(+s: St.Store, extra: String, request: String, status: String, +body: String) -> Bool:
+  WJ.Text.same(WA.Handled.response(web.handle(request, s)), web.head(status, Nat.show(WJ.Text.bytes(body, 0n)), extra) ++ body)
 
 def web.answers(+s: St.Store, request: String, status: String, +body: String) -> Bool:
-  WJ.Text.same(WA.Handled.response(WA.Api.handle(request, s)), web.head(status, Nat.show(WJ.Text.bytes(body, 0n)), "") ++ body)
+  web.answers.with(s, "", request, status, body)
 
 def web.writes(+s: St.Store, request: String) -> Bool:
-  Maybe.is_some(&2, St.Change, WA.Handled.change(WA.Api.handle(request, s)))
+  Maybe.is_some(&2, St.Change, WA.Handled.change(web.handle(request, s)))
 
 def web.ascii(s: String) -> List<&2, U32>:
   match s:
@@ -854,9 +904,20 @@ def web.lines(rs: List<&2, St.Rec>) -> String:
     case Con{r, rest}:
       St.Rec.line(r) ++ web.lines(rest)
 
+def web.orglines(gs: List<&2, St.Org>) -> String:
+  match gs:
+    case Nil{}:
+      ""
+    case Con{g, rest}:
+      St.Org.line(g) ++ web.orglines(rest)
+
+# The lines after a snapshot's head: its organizations, then its appraisals.
+def web.body(+s: St.Store) -> String:
+  web.orglines(St.Store.orgs(s)) ++ web.lines(St.Store.recs(s))
+
 # A snapshot's text, the way the shell writes it a line at a time.
 def web.snaptext(n: Nat, +s: St.Store) -> String:
-  St.Snapshot.head(n, s) ++ web.lines(St.Store.recs(s))
+  St.Snapshot.head(n, s) ++ web.body(s)
 
 def web.load(text: String) -> Maybe<&2, St.Snap>:
   St.Load.finish(St.Load.feed(web.ascii(text), St.Load.start()))
@@ -864,18 +925,25 @@ def web.load(text: String) -> Maybe<&2, St.Snap>:
 def web.loads(text: String) -> Bool:
   Maybe.is_some(&2, St.Snap, web.load(text))
 
+def web.holds(+s: St.Store, id: String, key: String) -> Bool:
+  St.Orgs.holds(id, WH.Sha.text(key), St.Store.orgs(s))
+
 def web.snap(m: Maybe<&2, St.Snap>) -> Bool:
   match m:
     case Some{St.Snap{n, +s}}:
       Nat.is_eq(n, 7n) && Nat.is_eq(St.Store.count(s), 2n) && web.found(s, "a1") && web.found(s, "a2")
+        && Nat.is_eq(St.Store.made(s), 2n) && web.holds(s, "o1", web.key1()) && web.holds(s, "o2", web.key2())
     case None{}:
       False{}
 
 def web.two() -> St.Store:
   web.store([web.create("k1"), web.create("k2")])
 
+def web.cancel.as(auth: String, id: String) -> String:
+  web.post.as(auth, "/api/v1/appraisals/" ++ id ++ "/cancel", "")
+
 def web.cancel(id: String) -> String:
-  web.post("/api/v1/appraisals/" ++ id ++ "/cancel", "")
+  web.cancel.as(web.bearer(web.key1()), id)
 
 # Two appraisals, the first cancelled.
 def web.one_cancelled() -> St.Store:
@@ -884,10 +952,10 @@ def web.one_cancelled() -> St.Store:
 # A log with a good line, a line that isn't a change, a cancel, and a last
 # line cut off by a crash.
 def web.log() -> String:
-  "{\"requested\":{\"id\":\"a1\",\"key\":\"k1\",\"address\":\"1 Main St\",\"zip\":\"78701\",\"state\":\"TX\",\"due\":\"2026-12-01\",\"status\":\"open\"}}\nnot a change\n{\"cancelled\":\"a1\"}\n{\"requested\":{\"id\":\"a2\""
+  "{\"requested\":{\"id\":\"a1\",\"organization\":\"o1\",\"key\":\"k1\",\"address\":\"1 Main St\",\"zip\":\"78701\",\"state\":\"TX\",\"due\":\"2026-12-01\",\"status\":\"open\"}}\nnot a change\n{\"cancelled\":\"a1\"}\n{\"requested\":{\"id\":\"a2\""
 
 def web.replay() -> St.Replay:
-  St.Replay.feed(web.ascii(web.log()), St.Replay.start(0n, St.Store.empty()))
+  St.Replay.feed(web.ascii(web.log()), St.Replay.start(0n, web.base()))
 
 def web.cancelled_in(+s: St.Store) -> Bool:
   web.answers(s, web.get("/api/v1/appraisals/a1"), "200 OK", web.rec("a1", "k1", "cancelled"))
@@ -904,11 +972,57 @@ def web.after_tear(torn: Bool) -> St.Store:
   St.Replay.store(St.Replay.finish(St.Replay.feed(web.ascii("{\"requested\":{\"id\":\"a3\"" ++ St.Change.line.after(torn, St.Cancelled{"a1"})), St.Replay.start(0n, web.two()))))
 
 def web.not_found() -> String:
-  "{\"error\":\"not_found\",\"detail\":\"No appraisal has this id\"}"
+  "{\"error\":\"not_found\",\"detail\":\"Your organization has no appraisal with this id\"}"
 
 # "P /" with Content-Length: 2, then the given body bytes.
 def web.sized(body: List<&2, U32>) -> List<&2, U32>:
   List.append(&2, U32, web.ascii("P / HTTP/1.1\r\nContent-Length: 2\r\n\r\n"), body)
+
+# Organizations and API keys
+# --------------------------
+
+def web.organize.as(auth: String, +body: String) -> String:
+  web.post.as(auth, "/api/v1/organizations", body)
+
+def web.organize(name: String) -> String:
+  web.organize.as(web.bearer(web.admin_key()), "{\"name\":\"" ++ name ++ "\"}")
+
+def web.unauthorized(+s: St.Store, request: String) -> Bool:
+  web.answers.with(s, "WWW-Authenticate: Bearer\r\n", request, "401 Unauthorized", "{\"error\":\"unauthorized\"}")
+
+def web.forbidden(+s: St.Store, request: String) -> Bool:
+  web.answers(s, request, "403 Forbidden", "{\"error\":\"forbidden\"}")
+
+# The same request with no admin key set in the environment.
+def web.no_admin(request: String) -> Bool:
+  WJ.Text.same(WA.Handled.response(WA.Api.handle(request, web.base(), None{}, web.seed())),
+    web.head("401 Unauthorized", "24", "WWW-Authenticate: Bearer\r\n") ++ "{\"error\":\"unauthorized\"}")
+
+# The change adding Cedar logs o3, its name and the hash of the key it
+# answers, and never the key itself.
+def web.logged.org(m: Maybe<&2, St.Change>) -> Bool:
+  match m:
+    case Some{St.Organized{St.Org{i, n, +h}}}:
+      WJ.Text.same(i, "o3") && WJ.Text.same(n, "Cedar") && WJ.Text.same(h, WH.Sha.text(web.seeded())) && Bool.not(WJ.Text.same(h, web.seeded()))
+    case other:
+      False{}
+
+def web.logged() -> Bool:
+  web.logged.org(WA.Handled.change(web.handle(web.organize("Cedar"), web.base())))
+
+# o3, added with web.seed()'s key, beside o1 and o2.
+def web.three() -> St.Store:
+  web.store([web.organize("Cedar")])
+
+def web.key.is(m: Maybe<&2, String>, s: String) -> Bool:
+  match m:
+    case Some{k}:
+      WJ.Text.same(k, s)
+    case None{}:
+      False{}
+
+def web.admin.is(m: Maybe<&2, String>) -> Bool:
+  Maybe.is_some(&2, String, m)
 
 def web_checks() -> List<&2, Check>:
   [Check{"GET /api/health answers 200 with its body", web.is("GET /api/health HTTP/1.1\r\nHost: localhost\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
@@ -932,17 +1046,17 @@ def web_checks() -> List<&2, Check>:
    Check{"the spec refuses two definitions of one name", Bool.and(Bool.not(WO.Spec.agree(web.clash())), WO.Spec.agree([WA.Schemas.error(), WA.Schemas.error()]))},
    Check{"a schema naming a field twice is not distinct", Bool.and(Bool.not(WS.Schema.distinct(web.twice())), Bool.not(WA.Answers.distinct([WA.Answer{WA.OK{}, "", web.twice()}])))},
    Check{"items or a row in a field's place is not well formed", Bool.and(Bool.not(WS.Schema.wellformed(WS.Schema.obj("A", WS.SField{"x", WS.SItems{WS.SStr{}}, WS.SEnd{}}))), Bool.and(Bool.not(WS.Schema.wellformed(WS.SList{WS.SStr{}})), WS.Schema.wellformed(WS.Schema.list(WA.Schemas.error()))))},
-   Check{"a new appraisal answers 201 with id a1, open", web.answers(St.Store.empty(), web.create("k1"), "201 Created", web.rec("a1", "k1", "open"))},
-   Check{"a new appraisal is written to the log", web.writes(St.Store.empty(), web.create("k1"))},
+   Check{"a new appraisal answers 201 with id a1, open", web.answers(web.base(), web.create("k1"), "201 Created", web.rec("a1", "k1", "open"))},
+   Check{"a new appraisal is written to the log", web.writes(web.base(), web.create("k1"))},
    Check{"the second appraisal gets id a2", web.answers(web.store([web.create("k1")]), web.create("k2"), "201 Created", web.rec("a2", "k2", "open"))},
    Check{"a repeated key answers 200 with the stored appraisal", web.answers(web.store([web.create("k1")]), web.create("k1"), "200 OK", web.rec("a1", "k1", "open"))},
    Check{"a repeated key writes nothing", Bool.not(web.writes(web.store([web.create("k1")]), web.create("k1")))},
-   Check{"a bad zip answers 422 with its code", web.answers(St.Store.empty(), web.post("/api/v1/appraisals", web.draft("k1", "7870", "TX")), "422 Unprocessable Content", "{\"error\":\"invalid_zip\",\"detail\":\"zip must be 5 digits\"}")},
-   Check{"a bad zip writes nothing", Bool.not(web.writes(St.Store.empty(), web.post("/api/v1/appraisals", web.draft("k1", "7870", "TX"))))},
-   Check{"a month past 12 answers 422", web.answers(St.Store.empty(), web.post("/api/v1/appraisals", "{\"key\":\"k\",\"address\":\"a\",\"zip\":\"78701\",\"state\":\"TX\",\"due\":\"2026-13-01\"}"), "422 Unprocessable Content", "{\"error\":\"invalid_due\",\"detail\":\"due must be a date, YYYY-MM-DD\"}")},
-   Check{"an empty key answers 422", web.answers(St.Store.empty(), web.post("/api/v1/appraisals", web.draft("", "78701", "TX")), "422 Unprocessable Content", "{\"error\":\"invalid_key\",\"detail\":\"key must be 1 to 64 characters\"}")},
-   Check{"a state outside the lower 48 isn't a NewAppraisal, so 400", web.answers(St.Store.empty(), web.post("/api/v1/appraisals", web.draft("k1", "78701", "HI")), "400 Bad Request", "{\"error\":\"invalid_body\"}")},
-   Check{"a body that isn't JSON is 400", web.answers(St.Store.empty(), web.post("/api/v1/appraisals", "{"), "400 Bad Request", "{\"error\":\"invalid_body\"}")},
+   Check{"a bad zip answers 422 with its code", web.answers(web.base(), web.post("/api/v1/appraisals", web.draft("k1", "7870", "TX")), "422 Unprocessable Content", "{\"error\":\"invalid_zip\",\"detail\":\"zip must be 5 digits\"}")},
+   Check{"a bad zip writes nothing", Bool.not(web.writes(web.base(), web.post("/api/v1/appraisals", web.draft("k1", "7870", "TX"))))},
+   Check{"a month past 12 answers 422", web.answers(web.base(), web.post("/api/v1/appraisals", "{\"key\":\"k\",\"address\":\"a\",\"zip\":\"78701\",\"state\":\"TX\",\"due\":\"2026-13-01\"}"), "422 Unprocessable Content", "{\"error\":\"invalid_due\",\"detail\":\"due must be a date, YYYY-MM-DD\"}")},
+   Check{"an empty key answers 422", web.answers(web.base(), web.post("/api/v1/appraisals", web.draft("", "78701", "TX")), "422 Unprocessable Content", "{\"error\":\"invalid_key\",\"detail\":\"key must be 1 to 64 characters\"}")},
+   Check{"a state outside the lower 48 isn't a NewAppraisal, so 400", web.answers(web.base(), web.post("/api/v1/appraisals", web.draft("k1", "78701", "HI")), "400 Bad Request", "{\"error\":\"invalid_body\"}")},
+   Check{"a body that isn't JSON is 400", web.answers(web.base(), web.post("/api/v1/appraisals", "{"), "400 Bad Request", "{\"error\":\"invalid_body\"}")},
    Check{"an appraisal reads back by its id", web.answers(web.two(), web.get("/api/v1/appraisals/a2"), "200 OK", web.rec("a2", "k2", "open"))},
    Check{"an unknown id is 404", web.answers(web.two(), web.get("/api/v1/appraisals/a9"), "404 Not Found", web.not_found())},
    Check{"cancelling answers 200 with the appraisal cancelled", web.answers(web.two(), web.cancel("a1"), "200 OK", web.rec("a1", "k1", "cancelled"))},
@@ -955,16 +1069,16 @@ def web_checks() -> List<&2, Check>:
    Check{"a path with an extra segment is 404", web.is("GET /api/v1/appraisals/a1/x HTTP/1.1\r\n\r\n", web.head("404 Not Found", "21", "") ++ "{\"error\":\"not_found\"}")},
    Check{"replay applies good lines, counts bad ones and a torn one", web.replayed(St.Replay.finish(web.replay()))},
    Check{"replay notices a torn last line", St.Replay.torn(web.replay())},
-   Check{"replay skips the lines a snapshot already holds", web.skipped(St.Replay.feed(web.ascii(web.log()), St.Replay.start(1n, St.Store.empty())))},
+   Check{"replay skips the lines a snapshot already holds", web.skipped(St.Replay.feed(web.ascii(web.log()), St.Replay.start(1n, web.base())))},
    Check{"a snapshot reads back", web.snap(web.load(web.snaptext(7n, web.two())))},
    Check{"a snapshot cut short doesn't load", Bool.not(web.loads(String.take(web.snaptext(7n, web.two()), 40n)))},
-   Check{"a snapshot missing its last record doesn't load", Bool.not(web.loads(St.Snapshot.head(7n, web.two()) ++ web.lines(St.Store.recs(web.store([web.create("k1")])))))},
-   Check{"a snapshot with a record past its head's count doesn't load", Bool.not(web.loads(St.Snapshot.head(7n, web.store([web.create("k1")])) ++ web.lines(St.Store.recs(web.two()))))},
+   Check{"a snapshot missing its last record doesn't load", Bool.not(web.loads(St.Snapshot.head(7n, web.two()) ++ web.body(web.store([web.create("k1")]))))},
+   Check{"a snapshot with a record past its head's count doesn't load", Bool.not(web.loads(St.Snapshot.head(7n, web.store([web.create("k1")])) ++ web.body(web.two())))},
    Check{"an empty file isn't a snapshot", Bool.not(web.loads(""))},
    Check{"a store with no appraisals has a snapshot", web.loads(web.snaptext(0n, St.Store.empty()))},
    Check{"after a torn write, the next change starts its own line and replays", web.cancelled_in(web.after_tear(True{}))},
    Check{"without that newline, the torn line swallows the next change", Bool.not(web.cancelled_in(web.after_tear(False{})))},
-   Check{"empty lines before a POST don't become its body", web.answers(St.Store.empty(), "\r\n" ++ web.create("k1"), "201 Created", web.rec("a1", "k1", "open"))},
+   Check{"empty lines before a POST don't become its body", web.answers(web.base(), "\r\n" ++ web.create("k1"), "201 Created", web.rec("a1", "k1", "open"))},
    Check{"empty lines before the request line don't end its headers", Bool.and(WA.Http.ready(web.ascii("\r\nP / HTTP/1.1\r\nContent-Length: 2\r\n\r\nab")), Bool.not(WA.Http.ready(web.ascii("\r\n\r\nP / HTTP/1.1\r\nContent-Length: 2\r\n\r\n"))))},
    Check{"UTF-8 bytes decode to characters", WJ.Text.same(U.Utf8.decode([99, 97, 102, 195, 169, 240, 159, 152, 128]), "caf\u{e9}\u{1f600}")},
    Check{"a bad or cut-off UTF-8 byte becomes U+FFFD", WJ.Text.same(U.Utf8.decode([97, 255, 98, 195]), "a\u{fffd}b\u{fffd}")},
@@ -973,6 +1087,39 @@ def web_checks() -> List<&2, Check>:
    Check{"a request with no body is whole once its headers end", Bool.and(WA.Http.ready(web.ascii("GET / HTTP/1.1\r\n\r\n")), Bool.not(WA.Http.ready(web.ascii("GET / HTTP/1.1\r\nHost: x\r\n"))))},
    Check{"a request with a body waits for Content-Length bytes", Bool.and(WA.Http.ready(web.ascii("POST / HTTP/1.1\r\ncontent-length: 2\r\n\r\nab")), Bool.not(WA.Http.ready(web.ascii("POST / HTTP/1.1\r\nContent-Length: 2\r\n\r\na"))))},
    Check{"Content-Length counts bytes, not characters", Bool.and(WA.Http.ready(web.sized([195, 169])), Bool.not(WA.Http.ready(web.sized([195]))))},
+   Check{"a store with organizations and no appraisals has a snapshot", web.loads(web.snaptext(0n, web.base()))},
+   Check{"a snapshot missing an organization doesn't load", Bool.not(web.loads(St.Snapshot.head(0n, web.base()) ++ web.orglines(St.Store.orgs(St.Store.apply(St.Store.empty(), web.org("o1", "Acme Appraisals", web.key1()))))))},
+   Check{"a snapshot with an appraisal where an organization belongs doesn't load", Bool.not(web.loads(St.Snapshot.head(0n, web.base()) ++ web.lines(St.Store.recs(web.two()))))},
+   Check{"SHA-256 of the empty string and of abc", Bool.and(WJ.Text.same(WH.Sha.text(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"), WJ.Text.same(WH.Sha.text("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"))},
+   Check{"SHA-256 of 56 bytes pads into a second block", WJ.Text.same(WH.Sha.text("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"), "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")},
+   Check{"a new API key is clv_ and the 32 random bytes in hex", web.key.is(WA.Key.of(web.seed()), web.seeded())},
+   Check{"no key is made from 31 bytes or a byte past 255", Bool.not(Bool.or(Maybe.is_some(&2, String, WA.Key.of(List.replicate(U32, 31n, 1))), Maybe.is_some(&2, String, WA.Key.of(256 <> List.replicate(U32, 31n, 1)))))},
+   Check{"an admin key needs 32 printable characters with no spaces", Bool.and(web.admin.is(WA.Api.admin(web.admin_key())), Bool.not(Bool.or(web.admin.is(WA.Api.admin(String.repeat("a", 31n))), web.admin.is(WA.Api.admin(String.repeat("a", 20n) ++ " " ++ String.repeat("a", 20n))))))},
+   Check{"health needs no key", web.is("GET /api/health HTTP/1.1\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
+   Check{"an appraisal route with no key is 401 with WWW-Authenticate", web.unauthorized(web.two(), web.get.as("", "/api/v1/appraisals/a1"))},
+   Check{"an appraisal route with an unknown key is 401", web.unauthorized(web.two(), web.get.as(web.bearer("clv_" ++ String.repeat("33", 32n)), "/api/v1/appraisals/a1"))},
+   Check{"a key outside the Bearer scheme is 401", web.unauthorized(web.two(), web.get.as("Authorization: Basic " ++ web.key1() ++ "\r\n", "/api/v1/appraisals/a1"))},
+   Check{"the header name and Bearer scheme ignore case", web.answers(web.two(), web.get.as("authorization: bearer " ++ web.key1() ++ "\r\n", "/api/v1/appraisals/a1"), "200 OK", web.rec("a1", "k1", "open"))},
+   Check{"a missing key is 401 before a broken body is read", web.unauthorized(web.base(), web.post.as("", "/api/v1/appraisals", "{"))},
+   Check{"a 401 writes nothing", Bool.not(web.writes(web.base(), web.create.as("", "k1")))},
+   Check{"the admin key on an appraisal route is 403", web.forbidden(web.two(), web.get.as(web.bearer(web.admin_key()), "/api/v1/appraisals/a1"))},
+   Check{"a dealer key on the organizations route is 403", web.forbidden(web.base(), web.organize.as(web.bearer(web.key1()), "{\"name\":\"Cedar\"}"))},
+   Check{"the organizations route with no key is 401", web.unauthorized(web.base(), web.organize.as("", "{\"name\":\"Cedar\"}"))},
+   Check{"with no admin key set, the admin key signs nobody in", web.no_admin(web.organize("Cedar"))},
+   Check{"adding an organization answers 201 with its id, name and key", web.answers(web.base(), web.organize("Cedar"), "201 Created", "{\"id\":\"o3\",\"name\":\"Cedar\",\"apiKey\":\"" ++ web.seeded() ++ "\"}")},
+   Check{"the log keeps the new key's hash, never the key", web.logged()},
+   Check{"the new key signs in as the new organization", web.answers(web.three(), web.create.as(web.bearer(web.seeded()), "k1"), "201 Created", web.rec.of("a1", "o3", "k1", "open"))},
+   Check{"an organization name of 101 characters answers 422", web.answers(web.base(), web.organize(String.repeat("n", 101n)), "422 Unprocessable Content", "{\"error\":\"invalid_name\",\"detail\":\"name must be 1 to 100 characters\"}")},
+   Check{"an empty organization name writes nothing", Bool.not(web.writes(web.base(), web.organize("")))},
+   Check{"an organization body that isn't NewOrganization is 400", web.answers(web.base(), web.organize.as(web.bearer(web.admin_key()), "{\"title\":\"Cedar\"}"), "400 Bad Request", "{\"error\":\"invalid_body\"}")},
+   Check{"with no random bytes, adding an organization is 500 and writes nothing", Bool.and(WJ.Text.same(WA.Handled.response(WA.Api.handle(web.organize("Cedar"), web.base(), web.admin(), [])), web.head("500 Internal Server Error", "22", "") ++ "{\"error\":\"no_entropy\"}"), Bool.not(Maybe.is_some(&2, St.Change, WA.Handled.change(WA.Api.handle(web.organize("Cedar"), web.base(), web.admin(), [])))))},
+   Check{"the second organization added is o4", web.answers(web.three(), web.organize("Dune"), "201 Created", "{\"id\":\"o4\",\"name\":\"Dune\",\"apiKey\":\"" ++ web.seeded() ++ "\"}")},
+   Check{"another organization's appraisal reads as 404", web.answers(web.two(), web.get.as(web.bearer(web.key2()), "/api/v1/appraisals/a1"), "404 Not Found", web.not_found())},
+   Check{"another organization's appraisal can't be cancelled", Bool.and(web.answers(web.two(), web.cancel.as(web.bearer(web.key2()), "a1"), "404 Not Found", web.not_found()), Bool.not(web.writes(web.two(), web.cancel.as(web.bearer(web.key2()), "a1"))))},
+   Check{"two organizations can use the same idempotency key", web.answers(web.two(), web.create.as(web.bearer(web.key2()), "k1"), "201 Created", web.rec.of("a3", "o2", "k1", "open"))},
+   Check{"a repeated key still finds the caller's own appraisal", web.answers(web.store([web.create("k1"), web.create.as(web.bearer(web.key2()), "k1")]), web.create("k1"), "200 OK", web.rec("a1", "k1", "open"))},
+   Check{"only a request to add an organization reads random bytes", Bool.and(WA.Api.needs_seed(web.organize("Cedar")), Bool.and(Bool.not(WA.Api.needs_seed(web.create("k1"))), Bool.and(Bool.not(WA.Api.needs_seed(web.get("/api/v1/appraisals/a1"))), Bool.not(WA.Api.needs_seed("GET /api/health HTTP/1.1\r\n\r\n")))))},
+   Check{"a request with empty lines before it is still seen as adding an organization", WA.Api.needs_seed("\r\n" ++ web.organize("Cedar"))},
    Check{"the spec is OpenAPI 3.1", String.starts_with(WO.Spec.text(), "{\n  \"openapi\": \"3.1.0\",")}]
 
 def show(c: Check) -> String:

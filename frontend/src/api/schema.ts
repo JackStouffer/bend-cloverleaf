@@ -42,7 +42,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Read an appraisal */
+        /** Read one of your organization's appraisals */
         get: operations["getAppraisal"];
         put?: never;
         post?: never;
@@ -61,8 +61,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Cancel an appraisal. Cancelling one that's already cancelled changes nothing */
+        /** Cancel one of your organization's appraisals. Cancelling one that's already cancelled changes nothing */
         post: operations["cancelAppraisal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add a dealer organization and issue its API key, which is shown only in this answer */
+        post: operations["createOrganization"];
         delete?: never;
         options?: never;
         head?: never;
@@ -87,6 +104,7 @@ export interface components {
         UsState: "AL" | "AR" | "AZ" | "CA" | "CO" | "CT" | "DE" | "FL" | "GA" | "IA" | "ID" | "IL" | "IN" | "KS" | "KY" | "LA" | "MA" | "MD" | "ME" | "MI" | "MN" | "MO" | "MS" | "MT" | "NC" | "ND" | "NE" | "NH" | "NJ" | "NM" | "NV" | "NY" | "OH" | "OK" | "OR" | "PA" | "RI" | "SC" | "SD" | "TN" | "TX" | "UT" | "VA" | "VT" | "WA" | "WI" | "WV" | "WY";
         Appraisal: {
             id: string;
+            organization: string;
             key: string;
             address: string;
             zip: string;
@@ -99,6 +117,14 @@ export interface components {
         Error: {
             error: string;
             detail?: string;
+        };
+        NewOrganization: {
+            name: string;
+        };
+        OrganizationKey: {
+            id: string;
+            name: string;
+            apiKey: string;
         };
     };
     responses: never;
@@ -169,6 +195,24 @@ export interface operations {
                     "application/json": components["schemas"]["Appraisal"];
                 };
             };
+            /** @description No key, or a key nobody has */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description A key for the other kind of route */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description The request breaks a rule, which error names */
             422: {
                 headers: {
@@ -218,7 +262,25 @@ export interface operations {
                     "application/json": components["schemas"]["Appraisal"];
                 };
             };
-            /** @description No appraisal has this id */
+            /** @description No key, or a key nobody has */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description A key for the other kind of route */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Your organization has no appraisal with this id */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -258,7 +320,25 @@ export interface operations {
                     "application/json": components["schemas"]["Appraisal"];
                 };
             };
-            /** @description No appraisal has this id */
+            /** @description No key, or a key nobody has */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description A key for the other kind of route */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Your organization has no appraisal with this id */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -269,6 +349,75 @@ export interface operations {
             };
             /** @description The appraisal is underway or completed, so it can't be cancelled */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The request was refused */
+            "4XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The change could not be saved, so nothing changed and the request can be sent again */
+            "5XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewOrganization"];
+            };
+        };
+        responses: {
+            /** @description The organization was added. Keep apiKey: it can't be read again */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationKey"];
+                };
+            };
+            /** @description No key, or a key nobody has */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description A key for the other kind of route */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The name breaks a rule, which error names */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -20,6 +20,7 @@ import ./core/nation.bend as N
 import ./web/api.bend as WA
 import ./proof/web.bend as PW
 import ./proof/store.bend as PSt
+import ./proof/auth.bend as PA
 import ./web/store.bend as WSt
 
 # Proves every law in LAWS.bend. The working lemmas live in proof/, and this file
@@ -235,6 +236,8 @@ def Laws.route_schemas_are_distinct(op):
       {==}
     case WA.Cancel{f}:
       {==}
+    case WA.Organize{n, i, k, h}:
+      {==}
 
 def Laws.route_answers_are_free(op):
   match op:
@@ -245,6 +248,8 @@ def Laws.route_answers_are_free(op):
     case WA.Fetch{f}:
       {==}
     case WA.Cancel{f}:
+      {==}
+    case WA.Organize{n, i, k, h}:
       {==}
 
 def Laws.handlers_stay_in_range(op):
@@ -277,6 +282,8 @@ def Laws.route_schemas_are_wellformed(op):
     case WA.Fetch{f}:
       {==}
     case WA.Cancel{f}:
+      {==}
+    case WA.Organize{n, i, k, h}:
       {==}
 
 def Laws.error_schema_is_wellformed():
@@ -325,6 +332,8 @@ def Laws.writes_publish_not_saved(op, c, w):
       L.never({WA.Route.writes(WA.Op.route(WA.Fetch{f})) == True{} : Bool}, Equal.cong(Maybe<&2, WSt.Change>, Bool, m => Maybe.is_some(&2, WSt.Change, m), None{}, Some{c}, w))
     case WA.Cancel{f}:
       {==}
+    case WA.Organize{n, i, k, h}:
+      {==}
 
 def Laws.good_request_is_logged_open(d, id, p):
   PSt.good_request_is_logged(d, id, p)
@@ -334,7 +343,7 @@ def Laws.good_request_answers_201(d, id, p):
 
 def Laws.new_appraisal_is_open(id, d):
   match d:
-    case WSt.Draft{k, a, z, st, due}:
+    case WSt.Draft{o, k, a, z, st, due}:
       {==}
 
 def Laws.unknown_appraisal_answers_404():
@@ -349,7 +358,7 @@ def Laws.cancelling_unknown_appraisal_writes_nothing():
 def Laws.reading_writes_nothing(m):
   {==}
 
-def Laws.open_appraisal_is_cancelled(i, k, a, z, st, d):
+def Laws.open_appraisal_is_cancelled(i, o, k, a, z, st, d):
   {==}
 
 def Laws.locked_appraisal_writes_nothing(r, e):
@@ -358,8 +367,79 @@ def Laws.locked_appraisal_writes_nothing(r, e):
 def Laws.locked_appraisal_answers_409(r, e):
   PSt.locked_appraisal_is_a_conflict(r, e)
 
-def Laws.cancelling_twice_writes_nothing(i, k, a, z, st, d):
+def Laws.cancelling_twice_writes_nothing(i, o, k, a, z, st, d):
   {==}
 
-def Laws.cancelling_twice_answers_200(i, k, a, z, st, d):
+def Laws.cancelling_twice_answers_200(i, o, k, a, z, st, d):
   {==}
+
+def Laws.dealer_routes_pass_only_dealers(w, o, e):
+  PA.dealers_pass(w, o, e)
+
+def Laws.admin_routes_pass_only_the_admin(w, o, e):
+  PA.admins_pass(w, o, e)
+
+def Laws.no_key_is_unauthorized_for_dealers():
+  {==}
+
+def Laws.no_key_is_unauthorized_for_admins():
+  {==}
+
+def Laws.admin_key_is_forbidden_for_dealer_routes():
+  {==}
+
+def Laws.dealer_key_is_forbidden_for_admin_routes(o):
+  {==}
+
+def Laws.no_key_is_nobody(admin, gs):
+  {==}
+
+def Laws.dealer_has_a_stored_key(h, admin, gs, o, e):
+  PA.known_dealer(h, admin, gs, o, e)
+
+def Laws.no_admin_without_an_admin_key(h, gs, e):
+  PA.no_admin(h, gs, e)
+
+def Laws.new_key_signs_in(h, i, n, gs):
+  PA.new_key_signs_in(h, i, n, gs)
+
+def Laws.new_key_signs_in_beside_the_admin(h, a, i, n, gs, e):
+  PA.new_key_beside_admin(h, a, i, n, gs, e)
+
+def Laws.bad_name_writes_nothing(n, i, k, h, c, t, p):
+  PA.bad_name_changes_nothing(n, i, k, h, c, t, p)
+
+def Laws.bad_name_answers_422(n, i, k, h, c, t, p):
+  PA.bad_name_is_refused(n, i, k, h, c, t, p)
+
+def Laws.good_name_logs_only_the_hash(n, i, k, h, p):
+  PA.good_name_is_logged(n, i, k, h, p)
+
+def Laws.good_name_answers_201(n, i, k, h, p):
+  PA.good_name_is_created(n, i, k, h, p)
+
+def Laws.good_name_answers_the_key(n, i, k, h, p):
+  PA.good_name_answers_the_key(n, i, k, h, p)
+
+def Laws.owned_lookup_is_the_callers(o, i, rs, r, e):
+  PA.owned_is_the_callers(o, i, rs, r, e)
+
+def Laws.key_lookup_is_the_callers(o, k, rs, r, e):
+  PA.keyed_is_the_callers(o, k, rs, r, e)
+
+def Laws.reading_finds_only_the_callers(ps, body, s, o, seed, r, e):
+  PA.fetch_is_the_callers(ps, body, s, o, seed, r, e)
+
+def Laws.cancelling_finds_only_the_callers(ps, body, s, o, seed, r, e):
+  PA.cancel_is_the_callers(ps, body, s, o, seed, r, e)
+
+def Laws.repeat_key_finds_only_the_callers(ps, body, s, o, seed, d, r, id, e):
+  PA.create_known(WA.Api.draft(o, body), o, s, d, r, id, e)
+
+def Laws.new_request_belongs_to_the_caller(ps, body, s, o, seed, d, k, id, e):
+  PA.create_is_the_callers(ps, body, s, o, seed, d, k, id, e)
+
+def Laws.logged_request_is_the_callers(id, d):
+  match d:
+    case WSt.Draft{o, k, a, z, st, due}:
+      {==}
