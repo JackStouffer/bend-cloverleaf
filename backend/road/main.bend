@@ -95,6 +95,24 @@ def Need(ok: Bool, +msg: String) -> IO(Unit):
     case False{}:
       IO.die(Unit, 1, msg)
 
+# Every arc pushes at most one heap entry and every entry is popped once, and
+# each of those takes under 16 steps, so a search can't legitimately run out.
+def Fuel.search(+nodes: Nat, +arcs: Nat) -> Nat:
+  Nat.mul(Nat.add(Nat.add(nodes, arcs), 2n), 32n)
+
+def Heap.cap(+arcs: Nat) -> Nat:
+  Nat.min(Nat.add(arcs, 1n), 1048576n)
+
+def Graph.config(+nodes: Nat, +arcs: Nat, +limit: Nat) -> L.Cfg:
+  +cap = Heap.cap(arcs)
+  L.Cfg{Fuel.search(nodes, arcs), 256n, nodes, U32.from_nat(nodes), U32.from_nat(cap), U32.from_nat(limit), G.Size.depth(32n, False{}, G.Size.work(nodes, cap), 0n)}
+
+# Refuses a lane depth that doesn't fit, before any copy is made.
+def Budget.check(+depth: Nat, +graph: Nat, +work: Nat) -> IO(Unit):
+  +per = L.Lane.bytes(graph, work)
+  +room = L.Lanes.fit(Budget.depth(), per, Budget.bytes())
+  Need(Nat.is_le(per, Budget.bytes()) && Nat.is_le(depth, room), "lane depth " ++ Nat.show(depth) ++ " won't fit: a lane takes " ++ Nat.show(Nat.div(per, 1000000n)) ++ "MB and the budget allows depth " ++ Nat.show(room))
+
 # The graph
 # ---------
 
@@ -116,7 +134,7 @@ def Load.counted(t: G.Tally, +path: String, +nodes: Nat, +arcs: Nat, +junctions:
     out : Loaded <- Load.placed(done, path, nodes, arcs, junctions, directions)
     return out
 
-def Load.turns(w: G.Ways, +folder: String, +junctions: Nat, +edges: Nat) -> IO(Loaded):
+def Load.turns(w: G.Ways, +folder: String, +junctions: Nat, +edges: Nat, +depth: Nat) -> IO(Loaded):
   G.Ways{+seen, +directions} = w
   +path = folder ++ "/turns.bin"
   do IO<Loaded>:
@@ -124,35 +142,21 @@ def Load.turns(w: G.Ways, +folder: String, +junctions: Nat, +edges: Nat) -> IO(L
     +bytes : Nat <- Size.file(path)
     +arcs : Nat = Nat.div(bytes, 12n)
     +nodes : Nat = Nat.add(U32.to_nat(directions), Nat.mul(2n, junctions))
+    Need(Nat.is_eq(Nat.mod(bytes, 12n), 0n), path ++ ": not whole 12-byte records")
+    Budget.check(depth, G.Size.depth(32n, False{}, G.Size.turns(nodes, arcs), 0n), L.Cfg.depth(Graph.config(nodes, arcs, 0n)))
     t : G.Tally <- Fold.file(~G.Tally, ~G.Turn.count.step, path, bytes, Chunk.turns(), G.Tally{[0 : U32^G.Size.depth(32n, False{}, G.Size.turns(nodes, arcs), 0n)], U32.from_nat(nodes), 0, 0, 0})
     out : Loaded <- Load.counted(t, path, nodes, arcs, junctions, U32.to_nat(directions))
     return out
 
-def Load.graph(+folder: String) -> IO(Loaded):
+def Load.graph(+folder: String, +depth: Nat) -> IO(Loaded):
   do IO<Loaded>:
     +raw : Nat <- Size.file(folder ++ "/nodes.bin")
     +bytes : Nat <- Size.file(folder ++ "/edges.bin")
+    Need(Nat.is_eq(Nat.mod(raw, 8n), 0n), folder ++ "/nodes.bin: not whole 8-byte records")
+    Need(Nat.is_eq(Nat.mod(bytes, 24n), 0n), folder ++ "/edges.bin: not whole 24-byte records")
     w : G.Ways <- Fold.file(~G.Ways, ~G.Ways.step, folder ++ "/edges.bin", bytes, Chunk.edges(), G.Ways{0, 0})
-    out : Loaded <- Load.turns(w, folder, Nat.div(raw, 8n), Nat.div(bytes, 24n))
+    out : Loaded <- Load.turns(w, folder, Nat.div(raw, 8n), Nat.div(bytes, 24n), depth)
     return out
-
-# Every arc pushes at most one heap entry and every entry is popped once, and
-# each of those takes under 16 steps, so a search can't legitimately run out.
-def Fuel.search(+nodes: Nat, +arcs: Nat) -> Nat:
-  Nat.mul(Nat.add(Nat.add(nodes, arcs), 2n), 32n)
-
-def Heap.cap(+arcs: Nat) -> Nat:
-  Nat.min(Nat.add(arcs, 1n), 1048576n)
-
-def Graph.config(+nodes: Nat, +arcs: Nat, +limit: Nat) -> L.Cfg:
-  +cap = Heap.cap(arcs)
-  L.Cfg{Fuel.search(nodes, arcs), 256n, nodes, U32.from_nat(nodes), U32.from_nat(cap), U32.from_nat(limit), G.Size.depth(32n, False{}, G.Size.work(nodes, cap), 0n)}
-
-# Refuses a lane depth that doesn't fit, before any copy is made.
-def Budget.check(+depth: Nat, +graph: Nat, +work: Nat) -> IO(Unit):
-  +per = L.Lane.bytes(graph, work)
-  +room = L.Lanes.fit(Budget.depth(), per, Budget.bytes())
-  Need(Nat.is_le(per, Budget.bytes()) && Nat.is_le(depth, room), "lane depth " ++ Nat.show(depth) ++ " won't fit: a lane takes " ++ Nat.show(Nat.div(per, 1000000n)) ++ "MB and the budget allows depth " ++ Nat.show(room))
 
 # Rows
 # ----
@@ -219,7 +223,6 @@ def Bench.run(l: Loaded, +searches: Nat, +limit: Nat, +depth: Nat) -> IO(Unit):
   +c = Graph.config(nodes, arcs, limit)
   +xs = Bench.sources(searches, 7919, U32.from_nat(junctions), U32.from_nat(directions), Nil{})
   do IO<Unit>:
-    Budget.check(depth, graph, L.Cfg.depth(c))
     +t0 : Nat <- IO.now()
     rows : List<&2, L.Row> <- Lanes.go(L.Lanes.make(depth, g, xs), Nil{}, c, Nat.pow(2n, depth), t0)
     return Unit{}
@@ -227,7 +230,7 @@ def Bench.run(l: Loaded, +searches: Nat, +limit: Nat, +depth: Nat) -> IO(Unit):
 def Bench.start(+folder: String, +searches: Nat, +limit: Nat, +depth: Nat) -> IO(Unit):
   do IO<Unit>:
     +t0 : Nat <- IO.now()
-    l : Loaded <- Load.graph(folder)
+    l : Loaded <- Load.graph(folder, depth)
     +t1 : Nat <- IO.now()
     IO.print("graph built in " ++ Nat.show(Nat.sub(t1, t0)) ++ "ms")
     Bench.run(l, searches, limit, depth)
@@ -326,7 +329,6 @@ def Matrix.run(l: Loaded, +stops: List<&2, U32>, +out: String, +limit: Nat, +dep
   +nodes = Offset.all(stops, U32.from_nat(directions))
   +ends = Offset.all(stops, U32.from_nat(Nat.add(directions, junctions)))
   do IO<Unit>:
-    Budget.check(depth, graph, L.Cfg.depth(c))
     +t0 : Nat <- IO.now()
     +rows : List<&2, L.Row> <- Lanes.go(L.Lanes.make(depth, g, nodes), ends, c, Nat.pow(2n, depth), t0)
     Matrix.save(out, List.length(&2, U32, nodes), rows)
@@ -366,14 +368,22 @@ def Matrix.loaded(l: Loaded, +folder: String, +points: String, +out: String, +li
 
 def Matrix.start(+folder: String, +points: String, +out: String, +limit: Nat, +depth: Nat) -> IO(Unit):
   do IO<Unit>:
-    l : Loaded <- Load.graph(folder)
+    l : Loaded <- Load.graph(folder, depth)
     Matrix.loaded(l, folder, points, out, limit, depth)
 
 # Commands
 # --------
 
-def num(s: String, d: Nat) -> Nat:
-  Maybe.default(&2, Nat, Nat.read(s), d)
+# A number argument, or a refusal when it isn't one.
+def Arg.got(m: Maybe<&2, Nat>, +s: String) -> IO(Nat):
+  match m:
+    case Some{n}:
+      IO.pure(Nat, n)
+    case None{}:
+      IO.die(Nat, 1, "not a number: " ++ s)
+
+def Arg(+s: String) -> IO(Nat):
+  Arg.got(Nat.read(s), s)
 
 def usage() -> IO(Unit):
   IO.print("usage: road bench <state folder> <searches> <limit in deciseconds> <lane depth>\n       road matrix <state folder> <points file> <output file> <limit> <lane depth>")
@@ -381,14 +391,21 @@ def usage() -> IO(Unit):
 def Command.six(is_matrix: Bool, +folder: String, +a: String, +b: String, +c: String, +d: String) -> IO(Unit):
   match is_matrix:
     case True{}:
-      Matrix.start(folder, a, b, num(c, 36000n), num(d, 0n))
+      do IO<Unit>:
+        +limit : Nat <- Arg(c)
+        +depth : Nat <- Arg(d)
+        Matrix.start(folder, a, b, limit, depth)
     case False{}:
       usage()
 
 def Command.bench(ok: Bool, +folder: String, +a: String, +b: String, +c: String) -> IO(Unit):
   match ok:
     case True{}:
-      Bench.start(folder, num(a, 100n), num(b, 36000n), num(c, 0n))
+      do IO<Unit>:
+        +searches : Nat <- Arg(a)
+        +limit : Nat <- Arg(b)
+        +depth : Nat <- Arg(c)
+        Bench.start(folder, searches, limit, depth)
     case False{}:
       usage()
 

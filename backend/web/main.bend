@@ -62,25 +62,31 @@ def logged(change: Maybe<&2, St.Change>, response: String, log: File, torn: Bool
 def handled(+h: Api.Handled, log: File, torn: Bool, +store: St.Store, reply: Chan(String), next: Next()) -> IO(Unit):
   logged(Api.Handled.change(h), Api.Handled.response(h), log, torn, store, reply, next)
 
-def seed.bytes(got: Result<&1, &1, U32 & String, List<&2, U32>>) -> List<&2, U32>:
+# The random bytes, or none when /dev/urandom can't be read, so a request that
+# needs a new key is refused.
+def seed.read(got: Result<&1, &1, U32 & String, List<&2, U32>>, text: String, reply: Chan(String), log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
   match got:
     case Done{bs}:
-      bs
+      handled(Api.Api.handle(text, store, admin, bs), log, torn, store, reply, next)
     case Fail{e}:
-      []
+      do IO<Unit>:
+        IO.print_err("cloverleaf web: /dev/urandom could not be read, so a new key was refused")
+        handled(Api.Api.handle(text, store, admin, []), log, torn, store, reply, next)
 
 def seeded(p: Bytes(), text: String, reply: Chan(String), log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
   (f, got) = p
   do IO<Unit>:
     File.close(f)
-    handled(Api.Api.handle(text, store, admin, seed.bytes(got)), log, torn, store, reply, next)
+    seed.read(got, text, reply, log, torn, store, admin, next)
 
 # A request that can't read the random bytes still gets an answer: one that
 # needs a new key is refused.
 def seed.opened(o: Result<&1, &1, U32 & String, File>, text: String, reply: Chan(String), log: File, torn: Bool, +store: St.Store, admin: Maybe<&2, String>, next: Next()) -> IO(Unit):
   match o:
     case Fail{e}:
-      handled(Api.Api.handle(text, store, admin, []), log, torn, store, reply, next)
+      do IO<Unit>:
+        IO.print_err("cloverleaf web: /dev/urandom could not be opened, so a new key was refused")
+        handled(Api.Api.handle(text, store, admin, []), log, torn, store, reply, next)
     case Done{f}:
       IO.bind(Bytes(), Unit, File.read_bytes(f, 32), p => seeded(p, text, reply, log, torn, store, admin, next))
 
@@ -140,31 +146,33 @@ def respond(socket: Socket, bytes: List<&2, U32>, jobs: Chan(Job())) -> IO(Unit)
 def Recv() -> Type:
   Socket & Result<&1, &1, U32 & String, Maybe<&1, List<&2, U32>>>
 
-def received(r: Recv(), bytes: List<&2, U32>, jobs: Chan(Job()), next: Socket -> List<&2, U32> -> IO(Unit)) -> IO(Unit):
+def received(r: Recv(), bytes: List<&2, U32>, total: Nat, jobs: Chan(Job()), next: Socket -> List<&2, U32> -> Nat -> IO(Unit)) -> IO(Unit):
   (socket, outcome) = r
   match outcome:
     case Fail{error}:
       Socket.close(socket)
     case Done{None{}}:
       respond(socket, bytes, jobs)
-    case Done{Some{chunk}}:
-      next(socket, List.append(&2, U32, bytes, chunk))
+    case Done{Some{+chunk}}:
+      next(socket, List.append(&2, U32, bytes, chunk), Nat.add(total, List.length(&2, U32, chunk)))
 
-def more(ready: Bool, socket: Socket, bytes: List<&2, U32>, jobs: Chan(Job()), next: Socket -> List<&2, U32> -> IO(Unit)) -> IO(Unit):
-  match ready:
-    case True{}:
-      respond(socket, bytes, jobs)
+def more(wants: Bool, socket: Socket, bytes: List<&2, U32>, total: Nat, jobs: Chan(Job()), next: Socket -> List<&2, U32> -> Nat -> IO(Unit)) -> IO(Unit):
+  match wants:
     case False{}:
-      IO.bind(Recv(), Unit, TCP.recv_bytes(socket, 65536), r => received(r, bytes, jobs, next))
+      respond(socket, bytes, jobs)
+    case True{}:
+      IO.bind(Recv(), Unit, TCP.recv_bytes(socket, 65536), r => received(r, bytes, total, jobs, next))
 
-# Reads until the request is whole, or the fuel runs out. nginx caps a body
-# at 1MB, and 24 reads of 64KB cover that and the headers.
-def reading(fuel: Nat, socket: Socket, +bytes: List<&2, U32>, +jobs: Chan(Job())) -> IO(Unit):
+# Reads until the request is whole, or Http.cap bytes have arrived. A read can
+# return less than it asked for, so the bound is on bytes. Each read returns at
+# least one byte or ends the request, so the fuel never runs out first; it is
+# there for the termination check. A request cut off at the cap gets a 400.
+def reading(fuel: Nat, socket: Socket, +bytes: List<&2, U32>, +total: Nat, +jobs: Chan(Job())) -> IO(Unit):
   match fuel:
     case 0n:
       respond(socket, bytes, jobs)
     case 1n+rest:
-      more(Api.Http.ready(bytes), socket, bytes, jobs, s => b => reading(rest, s, b, jobs))
+      more(Api.Http.wants(bytes, total), socket, bytes, total, jobs, s => b => t => reading(rest, s, b, t, jobs))
 
 def accepted(result: Listener & Result<&1, &1, U32 & String, Socket>, +jobs: Chan(Job()), next: Listener -> IO(Unit)) -> IO(Unit):
   (listener, outcome) = result
@@ -173,7 +181,7 @@ def accepted(result: Listener & Result<&1, &1, U32 & String, Socket>, +jobs: Cha
       next(listener)
     case Done{socket}:
       do IO<Unit>:
-        IO.spawn(Unit, reading(24n, socket, [], jobs))
+        IO.spawn(Unit, reading(Nat.add(Api.Http.cap(), 1n), socket, [], 0n, jobs))
         next(listener)
 
 # Fuel bounds the loop for the termination check. When it runs out the process
@@ -310,38 +318,59 @@ def snapshot.write(newer: Bool, path: String, n: Nat, +store: St.Store) -> IO(Un
     case False{}:
       IO.pure(Unit, Unit{})
 
-def mend.done(w: Wrote()) -> IO(File):
+# The log handle, and whether its last line is still torn because the newline
+# could not be written.
+def mend.done(w: Wrote()) -> IO(File & Bool):
   (f, r) = w
-  IO.pure(File, f)
+  match r:
+    case Done{u}:
+      IO.pure(File & Bool, (f, False{}))
+    case Fail{e}:
+      do IO<File & Bool>:
+        IO.print_err("cloverleaf web: the torn last line of the event log could not be ended")
+        return (f, True{})
 
 # A torn last line gets its newline, so the next change starts a line of its
 # own and the torn one stays a bad line.
-def mend(torn: Bool, log: File) -> IO(File):
+def mend(torn: Bool, log: File) -> IO(File & Bool):
   match torn:
     case True{}:
-      IO.bind(Wrote(), File, File.write(log, "\n"), mend.done)
+      IO.bind(Wrote(), File & Bool, File.write(log, "\n"), mend.done)
     case False{}:
-      IO.pure(File, log)
+      IO.pure(File & Bool, (log, False{}))
 
-def run(+jobs: Chan(Job()), log: File, store: St.Store, admin: Maybe<&2, String>) -> IO(Unit):
+def run(+jobs: Chan(Job()), log: File, torn: Bool, store: St.Store, admin: Maybe<&2, String>) -> IO(Unit):
   do IO<Unit>:
-    IO.spawn(Unit, keep(4000000000n, log, False{}, store, admin, jobs))
+    IO.spawn(Unit, keep(4000000000n, log, torn, store, admin, jobs))
     listener : Listener <- IO.try(Listener, TCP.listen("0.0.0.0", 8080))
     IO.print("cloverleaf web listening on 8080")
     serve(4000000000n, listener, jobs)
 
-def serving(log: File, store: St.Store, admin: Maybe<&2, String>) -> IO(Unit):
+def serving(m: File & Bool, store: St.Store, admin: Maybe<&2, String>) -> IO(Unit):
+  (log, torn) = m
   do IO<Unit>:
     jobs : Chan(Job()) <- Chan.new(Job(), 1024)
-    run(jobs, log, store, admin)
+    run(jobs, log, torn, store, admin)
+
+# A log shorter than the snapshot's count lost its tail, from a power cut, or it
+# was replaced or deleted. The snapshot is then rewritten with the log's real
+# line count, so the changes appended from now on are replayed after the next
+# restart and not skipped as if they were already in the snapshot.
+def short.warn(short: Bool) -> IO(Unit):
+  match short:
+    case True{}:
+      IO.print_err("cloverleaf web: the event log has fewer lines than the snapshot counts, so the snapshot is rewritten with the log's count")
+    case False{}:
+      IO.pure(Unit, Unit{})
 
 def mended(+dir: String, +skip: Nat, torn: Bool, +r: St.Replay, admin: Maybe<&2, String>) -> IO(Unit):
   do IO<Unit>:
     IO.print("cloverleaf web: " ++ Nat.show(St.Replay.lines(r)) ++ " log lines, " ++ Nat.show(skip) ++ " from the snapshot, "
       ++ Nat.show(St.Replay.bad(r)) ++ " not a change")
     log : File <- IO.try(File, File.open(dir ++ "/events.log", "a"))
-    mended : File <- mend(torn, log)
-    snapshot.write(Nat.is_lt(skip, St.Replay.lines(r)), dir ++ "/snapshot.jsonl", St.Replay.lines(r), St.Replay.store(r))
+    mended : File & Bool <- mend(torn, log)
+    short.warn(Nat.is_lt(St.Replay.lines(r), skip))
+    snapshot.write(Bool.not(Nat.is_eq(skip, St.Replay.lines(r))), dir ++ "/snapshot.jsonl", St.Replay.lines(r), St.Replay.store(r))
     serving(mended, St.Replay.store(r), admin)
 
 def resumed(+dir: String, +skip: Nat, +r: St.Replay, admin: Maybe<&2, String>) -> IO(Unit):

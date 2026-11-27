@@ -27,7 +27,7 @@ import ./baseline.bend as B
 # Files bigger than this are refused before anything is read. A state's matrix
 # for 4,000 points is 64MB.
 def Max.bytes() -> Nat:
-  64000000n
+  64000004n
 
 def Chunk() -> U32:
   786432
@@ -274,9 +274,6 @@ def run(+crew_count: Nat, +job_count: Nat, +days: Nat) -> IO(Unit):
 # Commands
 # --------
 
-def num(s: String, d: Nat) -> Nat:
-  Maybe.default(&2, Nat, Nat.read(s), d)
-
 def usage() -> IO(Unit):
   IO.print("usage: solver national <synth folder> <planner> <limit> <forks> <state>...\n       solver times <synth folder> <state> <limit>\n       solver <crews> <jobs> <days>")
 
@@ -291,14 +288,19 @@ def Names.copy(xs: List<String>) -> List<&2, String>:
 def Command.national(+dir: String, rest: List<String>) -> IO(Unit):
   match rest:
     case +mode <> +limit <> +forks <> names:
-      national(dir, mode, num(limit, 36000n), num(forks, 0n), Names.copy(names))
+      do IO<Unit>:
+        +l : Nat <- RM.Arg(limit)
+        +f : Nat <- RM.Arg(forks)
+        national(dir, mode, l, f, Names.copy(names))
     case _:
       usage()
 
 def Command.times(+dir: String, rest: List<String>) -> IO(Unit):
   match rest:
     case +name <> +limit <> _:
-      times(dir, name, num(limit, 36000n))
+      do IO<Unit>:
+        +l : Nat <- RM.Arg(limit)
+        times(dir, name, l)
     case _:
       usage()
 
@@ -315,7 +317,11 @@ def Command.go(+cmd: String, +dir: String, rest: List<String>) -> IO(Unit):
 def Command.bench(+a: String, +b: String, rest: List<String>) -> IO(Unit):
   match rest:
     case +c <> _:
-      run(num(a, 100n), num(b, 1000n), num(c, 7n))
+      do IO<Unit>:
+        +crews : Nat <- RM.Arg(a)
+        +jobs : Nat <- RM.Arg(b)
+        +days : Nat <- RM.Arg(c)
+        run(crews, jobs, days)
     case _:
       run(100n, 1000n, 7n)
 

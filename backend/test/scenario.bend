@@ -1122,7 +1122,7 @@ def web_checks() -> List<&2, Check>:
    Check{"a bad zip writes nothing", Bool.not(web.writes(web.base(), web.post("/api/v1/appraisals", web.draft("k1", "7870", "TX"))))},
    Check{"a month past 12 answers 422", web.answers(web.base(), web.post("/api/v1/appraisals", "{\"key\":\"k\",\"address\":\"a\",\"zip\":\"78701\",\"state\":\"TX\",\"due\":\"2026-13-01\"}"), "422 Unprocessable Content", "{\"error\":\"invalid_due\",\"detail\":\"due must be a date, YYYY-MM-DD\"}")},
    Check{"an empty key answers 422", web.answers(web.base(), web.post("/api/v1/appraisals", web.draft("", "78701", "TX")), "422 Unprocessable Content", "{\"error\":\"invalid_key\",\"detail\":\"key must be 1 to 64 characters\"}")},
-   Check{"a state outside the lower 48 isn't a NewAppraisal, so 400", web.answers(web.base(), web.post("/api/v1/appraisals", web.draft("k1", "78701", "HI")), "400 Bad Request", "{\"error\":\"invalid_body\"}")},
+   Check{"a state outside the lower 48 and DC isn't a NewAppraisal, so 400", web.answers(web.base(), web.post("/api/v1/appraisals", web.draft("k1", "78701", "HI")), "400 Bad Request", "{\"error\":\"invalid_body\"}")},
    Check{"a body that isn't JSON is 400", web.answers(web.base(), web.post("/api/v1/appraisals", "{"), "400 Bad Request", "{\"error\":\"invalid_body\"}")},
    Check{"an appraisal reads back by its id", web.answers(web.two(), web.get("/api/v1/appraisals/a2"), "200 OK", web.rec("a2", "k2", "open"))},
    Check{"an unknown id is 404", web.answers(web.two(), web.get("/api/v1/appraisals/a9"), "404 Not Found", web.not_found())},
@@ -1219,6 +1219,34 @@ def key_checks() -> List<&2, Check>:
    Check{"replaying a revoke and a new key signs in with the new key only", Bool.and(web.holds(web.keylog.store(), "o1", web.seeded()), Bool.not(web.holds(web.keylog.store(), "o1", web.key1())))},
    Check{"GET on a key route is 405 with Allow", web.is("GET /api/v1/organizations/o1/key HTTP/1.1\r\n\r\n", web.head("405 Method Not Allowed", "30", "Allow: POST\r\n") ++ "{\"error\":\"method_not_allowed\"}")}]
 
+# Fixes from the whole-code review
+# --------------------------------
+
+# A log line longer than the replay keeps, then a cancel of a1.
+def web.wide() -> St.Replay:
+  St.Replay.finish(St.Replay.feed(web.ascii(String.repeat("x", 70000n) ++ "\n{\"cancelled\":\"a1\"}\n"), St.Replay.start(0n, web.two())))
+
+def web.wide.ok(+r: St.Replay) -> Bool:
+  Nat.is_eq(St.Replay.lines(r), 2n) && Nat.is_eq(St.Replay.bad(r), 1n) && web.cancelled_in(St.Replay.store(r))
+
+def web.blank_name() -> String:
+  "{\"error\":\"invalid_name\",\"detail\":\"name must not be blank\"}"
+
+def web.control_name() -> String:
+  "{\"error\":\"invalid_name\",\"detail\":\"name must not hold control characters\"}"
+
+def review_checks() -> List<&2, Check>:
+  [Check{"a DC appraisal answers 201", web.answers(web.base(), web.post("/api/v1/appraisals", web.draft("k1", "20001", "DC")), "201 Created", "{\"id\":\"a1\",\"organization\":\"o1\",\"key\":\"k1\",\"address\":\"1 Main St\",\"zip\":\"20001\",\"state\":\"DC\",\"due\":\"2026-12-01\",\"status\":\"open\"}")},
+   Check{"an organization name of only spaces answers 422", web.answers(web.base(), web.organize("   "), "422 Unprocessable Content", web.blank_name())},
+   Check{"an organization name of only spaces writes nothing", Bool.not(web.writes(web.base(), web.organize("   ")))},
+   Check{"an organization name holding a newline answers 422", web.answers(web.base(), web.organize("Acme\\nAppraisals"), "422 Unprocessable Content", web.control_name())},
+   Check{"an organization name holding a tab writes nothing", Bool.not(web.writes(web.base(), web.organize("Acme\\tAppraisals")))},
+   Check{"an organization name with spaces inside still answers 201", web.answers(web.base(), web.organize(" Cedar Hill "), "201 Created", "{\"id\":\"o3\",\"name\":\" Cedar Hill \",\"apiKey\":\"" ++ web.seeded() ++ "\"}")},
+   Check{"a log line over 64KB counts as bad, and the next line still applies", web.wide.ok(web.wide())},
+   Check{"a request short of its headers is read on", WA.Http.wants(web.ascii("GET / HTTP/1.1\r\n"), 16n)},
+   Check{"a request is read no further once it reaches the byte cap", Bool.not(WA.Http.wants(web.ascii("GET / HTTP/1.1\r\n"), WA.Http.cap()))},
+   Check{"a whole request is read no further", Bool.not(WA.Http.wants(web.ascii("GET / HTTP/1.1\r\n\r\n"), 18n))}]
+
 def show(c: Check) -> String:
   match c:
     case Check{n, True{}}:
@@ -1250,5 +1278,5 @@ def finish(n: Nat) -> IO(Unit):
       IO.die(Unit, 1, Nat.show(n) ++ " scenarios failed")
 
 def main() -> IO(Unit):
-  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, load_checks(), List.append(&2, Check, nation_checks(), List.append(&2, Check, base_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), List.append(&2, Check, road_checks(), List.append(&2, Check, web_checks(), key_checks())))))))))
+  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, load_checks(), List.append(&2, Check, nation_checks(), List.append(&2, Check, base_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), List.append(&2, Check, road_checks(), List.append(&2, Check, web_checks(), List.append(&2, Check, key_checks(), review_checks()))))))))))
   IO.bind(Unit, Unit, print_all(all), u => finish(failed(all)))

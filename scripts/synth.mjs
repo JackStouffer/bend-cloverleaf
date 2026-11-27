@@ -25,6 +25,7 @@
 // through the states in order, so each state's are sorted.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export const COVER_KM = 30;
 const TIE = 1.25;
@@ -131,7 +132,10 @@ export function makeCrew(rand, id, home, first, span) {
     while (all.length > 5) all.splice(pick(rand, all.length), 1);
     offsets = all;
   }
-  if (rand() < 0.1) offsets = offsets.filter((_, i, xs) => i !== pick(rand, xs.length) || xs.length <= 3);
+  if (rand() < 0.1) {
+    const off = pick(rand, offsets.length);
+    offsets = offsets.filter((_, i) => i !== off);
+  }
   const days = offsets.filter((o) => o < span).map((o) => first + o);
   const maxMinutes = weighted(rand, [[10, 360], [15, 420], [55, 480], [15, 540], [5, 600]]);
   return { id, home, zips: [], maxMinutes, days };
@@ -273,4 +277,4 @@ function main([roadDir, outlineDir, outDir, crewArg, jobArg, firstArg, seedArg =
   console.log(`${crewId - 1} contractors and ${jobId - 1} appraisals in ${summary.length} states`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) main(process.argv.slice(2));
+if (process.argv[1] === fileURLToPath(import.meta.url)) main(process.argv.slice(2));

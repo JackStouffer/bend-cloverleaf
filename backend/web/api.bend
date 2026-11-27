@@ -352,7 +352,7 @@ def Endpoint.route(e: Endpoint) -> Route:
     case ECreate{}:
       Route{Post{}, "/api/v1/appraisals", "createAppraisal", "Request an appraisal. Sending the same key again is safe", Some{St.Schemas.draft()}, True{}, Dealers{},
         [Answer{Created{}, "The appraisal was requested", St.Schemas.appraisal()},
-         Answer{OK{}, "An appraisal with this key was already requested, so nothing changed", St.Schemas.appraisal()},
+         Answer{OK{}, "An appraisal with this key was already requested, so nothing changed and the rest of the body is ignored", St.Schemas.appraisal()},
          Answer{Unprocessable{}, "The request breaks a rule, which error names", Schemas.error()}]}
     case EFetch{}:
       Route{Get{}, "/api/v1/appraisals/{id}", "getAppraisal", "Read one of your organization's appraisals", None{}, False{}, Dealers{},
@@ -1014,6 +1014,17 @@ def Http.ready.from(+bs: List<&2, U32>) -> Bool:
 # lines before the request line, and the body has Content-Length bytes.
 def Http.ready(+bs: List<&2, U32>) -> Bool:
   Http.ready.from(Http.lead(bs))
+
+# The most bytes the web process reads for one request. nginx caps an API body
+# at 16KB, and the request line and headers get up to 64KB more.
+def Http.cap() -> Nat:
+  81920n
+
+# Whether to read more of a request: it isn't whole yet, and the total bytes
+# read so far are under the cap. A read can return less than it asked for, so
+# the bound is on bytes, not on reads.
+def Http.wants(+bs: List<&2, U32>, +total: Nat) -> Bool:
+  Bool.not(Http.ready(bs)) && Nat.is_lt(total, Http.cap())
 
 # Paths
 # -----

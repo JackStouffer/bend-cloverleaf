@@ -1,6 +1,6 @@
 # Cloverleaf: Milestone Plan
 
-Cloverleaf is a proof of concept that tests whether Bend works for general-purpose web programming. It's a full working app that plans daily routes for about 1,000 auto appraisal contractors across the lower 48.
+Cloverleaf is a proof of concept that tests whether Bend works for general-purpose web programming. It's a full working app that plans daily routes for about 1,000 auto appraisal contractors across the lower 48 and DC.
 
 ## What we're building
 
@@ -170,7 +170,7 @@ Compose runs the app the way a real deployment would, so nothing talks to the ba
 - **Images:** `backend/Dockerfile` builds from the repo root into three images, `web`, `road` and `solver`, and fails if `bend PROOF.bend`, the Bend checks or the scenarios fail. All three have built and run on Docker Desktop, and the national solve ran in the `solver` image under its 2GB cap. `web` and `nginx` have run together under Compose in a Linux sandbox, where the contract and crash tests passed through nginx. The `road` image wasn't built there, because it needs the 30GB data rebuild.
 - **Certificates:** nginx creates a self-signed certificate in a Docker volume on first start. No key is ever committed.
 - **Secrets:** come from a gitignored `.env` file, never from the images or Compose files. The first is `CLOVERLEAF_ADMIN_KEY`, which Compose passes to the web process, alone.
-- **Backend protection:** nginx buffers requests and limits body size, so slow or oversized clients never reach Bend's event loop. Server-Sent Events will need a route with buffering turned off.
+- **Backend protection:** nginx buffers requests, so slow clients never tie up Bend's event loop. The web process reads a request whole before it checks the key, so nginx also caps API bodies at 16KB and each address at 16 open API connections, and the web process stops reading a request at 80KB. Many addresses at once are not bounded yet. Server-Sent Events will need a route with buffering turned off.
 - **Road data:** part of the `road` image, at `/road/<state>`. A plain `docker build` fetches the US extract and rebuilds the data from scratch, as a deployed image should. Local Compose runs set `ROAD_DATA=local` and copy the cached, gitignored `data/road` instead, which takes about 30 seconds instead of half an hour. The image is about 10GB.
 
 ### API contract
@@ -256,6 +256,7 @@ Caps, set with Compose `mem_limit` and an equal `memswap_limit`. `road` and `roa
 | `solver` | 2GB | 58MB on the national solve with every state's road times, before events |
 | `road` | 1GB | On turn graphs, Texas runs one lane in 546MB, and 584MB on a 1,000-stop matrix |
 | `road-build` | 1GB | 746MB on the full US, with turn graphs. Run only to refresh data |
+| `frontend` | 1GB | Development only, never deployed: Vite with hot reload, after `npm ci` on start. Not yet measured |
 | OS and page cache | About 3.3GB | Whatever is left |
 
 ### Solving in parallel
@@ -368,7 +369,7 @@ Synthetic data generator, one nightly multi-day solve per state, contractor assi
 HTTP/1.1, JSON, the route table and schema-driven codecs, the OpenAPI generator, event log and snapshots, password and API-key auth, the external API, organizations and roles, and process wiring. Also adds the generated client and contract tests to the existing frontend project, so the contract is proven end to end before the UI is built.
 
 **Done when:** simulated dealer clients can create, read and cancel requests using the generated spec, real responses pass contract tests, a breaking API change fails `tsc`, data survives a crash, and tenant isolation is proven.
-**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. Dealers can create, read and cancel appraisals, with request bodies, path parameters and enums, on an append-only event log with snapshots. Contract tests check real responses through nginx against the spec, and the data survives the web process being killed. Dealer organizations have API keys, an admin key adds them, and tenant isolation is proven for every dealer request. The admin can rotate an organization's key and revoke it. Still to come: query parameters, listing organizations, password auth and sessions for people, roles, the external API, and serving `openapi.json`.
+**Status:** in progress. The contract chain is built: JSON, schema-driven codecs with a proven round trip, the route table with handler types computed from routes, HTTP dispatch with typed errors, the OpenAPI 3.1 generator, the generated client, and the drift check. Dealers can create, read and cancel appraisals, with request bodies, path parameters and enums, on an append-only event log with snapshots. Contract tests check real responses through nginx against the spec, and the data survives the web process being killed. Dealer organizations have API keys, an admin key adds them, and tenant isolation is proven for every dealer request. The admin can rotate an organization's key and revoke it. Still to come: an array-backed store with an id and key index, a snapshot taken while the process runs and not only at startup, query parameters, listing organizations, password auth and sessions for people, roles, the external API, and serving `openapi.json`.
 
 ### 5. Geocoding (M)
 
@@ -534,6 +535,38 @@ Some injected bugs were caught because a proof script stopped matching the code,
 
 - **Parallel reads:** an array has one owner, so lanes can't share a read-only graph without `@unsafe`. Copying it is the largest memory cost in the road search.
 
+### Whole-code review after Milestone 4 keys
+
+A review of every file on main, not a diff, found 20 issues. Each was checked against the code on its own before anything changed. 18 led to a fix or a plan note, and 2 were left as they are: the samplers in `compare-osrm.mjs` and `check-road-matrix.mjs` aren't true Park-Miller, which only matters for benchmark sampling, and the solver keeps the decoded words of `instance.bin` in a list before decoding it, which is small at the planned scale.
+
+**What changed**
+
+- `web/main.bend`: a failed write of the newline that ends a torn log line is now remembered, so the next change starts its own line. A snapshot that counts more lines than the log has is rewritten with the log's count, and the process says so. A request is read until it is whole or reaches 80KB, not for a fixed 24 socket reads, so a body that arrives in small pieces is no longer cut short. A failed read of `/dev/urandom` is printed on stderr.
+- `web/store.bend`: replay keeps at most 64KB of a log line, and counts a longer line as bad. DC is a state. An organization name can't be blank or hold control characters.
+- `deploy/nginx`: API bodies are capped at 16KB, and each address can hold 16 open API connections.
+- `road/main.bend` and `solver/main.bend`: the lane budget is checked before the turn graph is allocated, files that aren't whole records are refused, and a numeric argument that doesn't parse is refused instead of falling back to a default. The solver's matrix limit admits the 4,000 points its comment promises.
+- `scripts/synth.mjs`: a crew that takes a day off now drops exactly one day. This changes every later draw for a seed, so `data/synth` and figures measured on it before this change don't match a fresh run.
+- Docs: the 5XX and repeated-key answers in the spec say what actually happens, the dev `frontend` service has a cap, and the store's memory limits are written down above.
+
+**Proof effort**
+
+| Measure | Result |
+|---|---|
+| Laws | None new or changed |
+| Proofs | None changed |
+| Checking everything | about 6s |
+| Scenarios | 10 new, 246 in all |
+| `@unsafe` or foreign code | None new |
+
+**Bugs**
+
+Proofs caught none. Most are in the IO shells, the Node scripts or nginx, where no law reaches, or in data that two parts of the system have to agree on, like the state list and the road data. Four of them could lose or refuse real data: the torn-line newline, the snapshot ahead of the log, the cut-short body, and DC. The laws cover the replay of a log as text, but not what the shell does when a write or read fails, which is where three of those lived.
+
+**Friction**
+
+- **Order of defs:** a def can't call one defined further down the file, with "expected a filled definition", so checking the budget before loading meant moving the budget code above the loader.
+- **Wide records, again:** a sixth `Replay` field meant touching every match on it.
+
 ### Milestone 4 key rotation and revocation
 
 **What was built**
@@ -579,7 +612,7 @@ Proofs caught none in the code as written. Choosing how to mark a revoked key wa
 
 - `POST /api/v1/organizations`, which takes the admin key and a `NewOrganization` name, and answers `OrganizationKey`: the id (`o1`, `o2` and on), the name and an API key, shown once. Every appraisal route now takes a dealer key, and `Appraisal` names its `organization`.
 - `web/sha256.bend`: SHA-256, pure. Base has no crypto. The store keeps only each key's hash, and a request's key is hashed and looked up.
-- `web/api.bend`: each route has an auth rule, `Open`, `Dealers` or `Admins`. The gate runs before the body is read. No key, or one nobody has, is a 401 with `WWW-Authenticate: Bearer`, and a key for the other kind of route is a 403. Lookups take the caller's organization, so another dealer's appraisal reads as 404, and idempotency keys are per organization. A key is `clv_` and 64 hex digits from 32 bytes of `/dev/urandom`.
+- `web/api.bend`: each route has an auth rule, `Open`, `Dealers` or `Admins`. The gate runs before the body is parsed, though the shell has read it by then. No key, or one nobody has, is a 401 with `WWW-Authenticate: Bearer`, and a key for the other kind of route is a 403. Lookups take the caller's organization, so another dealer's appraisal reads as 404, and idempotency keys are per organization. A key is `clv_` and 64 hex digits from 32 bytes of `/dev/urandom`.
 - `web/store.bend`: an `organized` change in the log, organizations in the store and the snapshot, ahead of the appraisals.
 - `web/openapi.bend`: `dealerKey` and `adminKey` Bearer schemes, each operation's `security`, and its 401 and 403.
 - `web/main.bend`: reads `CLOVERLEAF_ADMIN_KEY` at startup and keeps only its hash. A key that isn't at least 32 printable ASCII characters with no spaces sets no admin, and the process says so on stderr. Only a request to add an organization or rotate its key reads `/dev/urandom`. It reads it before the caller is checked, which costs less than hashing the caller's key.
@@ -652,7 +685,7 @@ A code review then found four bugs that neither the proofs nor the tests had cau
 - **No fsync or rename:** the log can't be forced to disk, so an acknowledged write survives a process crash but maybe not a power cut. The snapshot can't be written to a temporary file and renamed, so a crash mid-write leaves a broken snapshot. The shell copes by falling back to the whole log.
 - **Names:** a type called `Event` clashed with Base, so the log's entries are `Change` in Bend and `Event` in the spec.
 - **Literals:** `[195u]` is refused. A bare number is already a `U32`, and `n` makes a `Nat`.
-- **Memory:** the store is a list, so a lookup is linear. That's fine for this slice, but tens of thousands of appraisals will need an array store. The first version read the snapshot whole, as bytes, then a String, then a JSON tree, which would have broken the 512MB cap long before the store did. It's now a head line and a line per record, read and written a line at a time.
+- **Memory:** the store is a list, so a lookup is linear. A record costs about 2.5KB as `String`s, so the 512MB cap holds about 200,000 appraisals, a few weeks at 5,000 to 10,000 a day. Replay also checks each requested line against every record before it, so startup grows with log lines times records. An array store with an id and key index is needed well before Milestone 8. The first version read the snapshot whole, as bytes, then a String, then a JSON tree, which would have broken the 512MB cap long before the store did. It's now a head line and a line per record, read and written a line at a time.
 - **Good:** the single-writer design was one recursive def with a channel, and it worked first time. Handlers taking a resolved `Op` meant every existing law about handlers kept its wording and covered the new routes unchanged.
 
 ### Milestone 4 API contract

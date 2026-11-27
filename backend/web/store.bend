@@ -14,9 +14,9 @@ import ./utf8.bend as U
 # Enums
 # -----
 
-# The lower 48, the only states Cloverleaf plans.
+# The lower 48 and DC, the only places Cloverleaf plans.
 def Enums.states() -> List<&2, String>:
-  ["AL", "AR", "AZ", "CA", "CO", "CT", "DE", "FL", "GA", "IA", "ID", "IL",
+  ["AL", "AR", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "GA", "IA", "ID", "IL",
    "IN", "KS", "KY", "LA", "MA", "MD", "ME", "MI", "MN", "MO", "MS", "MT",
    "NC", "ND", "NE", "NH", "NJ", "NM", "NV", "NY", "OH", "OK", "OR", "PA",
    "RI", "SC", "SD", "TN", "TX", "UT", "VA", "VT", "WA", "WI", "WV", "WY"]
@@ -348,6 +348,14 @@ def Text.between(+n: Nat, lo: Nat, hi: Nat) -> Bool:
 def Text.sized(s: String, lo: Nat, hi: Nat) -> Bool:
   Text.between(String.length(s), lo, hi)
 
+# s holds a control character: a code below 32, or 127.
+def Text.control(s: String) -> Bool:
+  match s:
+    case SCon{+c, t}:
+      Nat.is_lt(J.Text.code(c), 32n) || Nat.is_eq(J.Text.code(c), 127n) || Text.control(t)
+    case SNil{}:
+      False{}
+
 def Date.within(m: Maybe<&2, Nat>, hi: Nat) -> Bool:
   match m:
     case Some{n}:
@@ -390,7 +398,9 @@ def Draft.problem(d: Draft) -> Maybe<&2, Problem>:
 
 # The first rule an organization's name breaks, or None.
 def Org.problem(+name: String) -> Maybe<&2, Problem>:
-  Draft.first(Text.sized(name, 1n, 100n), "invalid_name", "name must be 1 to 100 characters", None{})
+  Draft.first(Text.sized(name, 1n, 100n), "invalid_name", "name must be 1 to 100 characters",
+    Draft.first(Nat.is_lt(0n, String.length(String.trim(name))), "invalid_name", "name must not be blank",
+      Draft.first(Bool.not(Text.control(name)), "invalid_name", "name must not hold control characters", None{})))
 
 # Events and the store
 # --------------------
@@ -406,7 +416,10 @@ type Change is Data:
   Rekeyed{org: Org}
   Revoked{id: String}
 
-# Records and organizations newest first. count is how many appraisals were
+# Records newest first. orgs and retired put the organization changed last
+# first: a new, rekeyed or reactivated one at the head of orgs, a revoked one
+# at the head of retired. Order means nothing for organizations, since each is
+# looked up by its id or key hash. count is how many appraisals were
 # ever requested, so the next id is a+(count+1), and made is how many
 # organizations were ever added, so the next is o+(made+1). Ids are never
 # reused. orgs are the organizations whose key works, the only ones a key is
@@ -661,7 +674,7 @@ def Change.parse(line: String) -> Maybe<&2, Change>:
 # ---------
 
 # A snapshot is a head line, then one organization per line, active ones
-# then revoked ones, then one record per line, each newest first, so the shell writes and reads it a line at a
+# then revoked ones, then one record per line, each in store order, so the shell writes and reads it a line at a
 # time and never holds it whole. One cut off by a crash has fewer lines than
 # its head says, and doesn't load.
 
@@ -900,32 +913,53 @@ def Load.finish(l: Load) -> Maybe<&2, Snap>:
 # Replay state while the shell reads the log in chunks of bytes. lines counts
 # the lines read so far, and the first skip of them are already in the
 # snapshot the store started from. bad counts lines that weren't a change.
-# line holds the bytes of the line being read, reversed.
+# line holds the bytes of the line being read, reversed, and width counts
+# them. Only the first Replay.width() bytes of a line are kept, so a damaged log
+# with a long run of bytes and no newline can't fill the memory. A line longer
+# than that is a bad line. A real change is a few KB at most.
 type Replay is Data:
-  Replay{lines: Nat, skip: Nat, bad: Nat, store: Store, line: List<&2, U32>}
+  Replay{lines: Nat, skip: Nat, bad: Nat, store: Store, line: List<&2, U32>, width: Nat}
+
+def Replay.width() -> Nat:
+  65536n
 
 def Replay.start(skip: Nat, s: Store) -> Replay:
-  Replay{0n, skip, 0n, s, []}
+  Replay{0n, skip, 0n, s, [], 0n}
 
 def Replay.got(m: Maybe<&2, Change>, n: Nat, skip: Nat, bad: Nat, +s: Store) -> Replay:
   match m:
     case Some{c}:
-      Replay{n, skip, bad, Store.apply(s, c), []}
+      Replay{n, skip, bad, Store.apply(s, c), [], 0n}
     case None{}:
-      Replay{n, skip, Nat.add(bad, 1n), s, []}
+      Replay{n, skip, Nat.add(bad, 1n), s, [], 0n}
 
-def Replay.take(old: Bool, n: Nat, skip: Nat, bad: Nat, s: Store, text: String) -> Replay:
+def Replay.parse(long: Bool, text: String) -> Maybe<&2, Change>:
+  match long:
+    case True{}:
+      None{}
+    case False{}:
+      Change.parse(text)
+
+def Replay.take(old: Bool, long: Bool, n: Nat, skip: Nat, bad: Nat, s: Store, text: String) -> Replay:
   match old:
     case True{}:
-      Replay{n, skip, bad, s, []}
+      Replay{n, skip, bad, s, [], 0n}
     case False{}:
-      Replay.got(Change.parse(text), n, skip, bad, s)
+      Replay.got(Replay.parse(long, text), n, skip, bad, s)
 
 # The line just read ends.
 def Replay.end(r: Replay) -> Replay:
   match r:
-    case Replay{+n, +skip, bad, s, line}:
-      Replay.take(Nat.is_lt(n, skip), Nat.add(n, 1n), skip, bad, s, U.Utf8.decode(List.reverse(&2, U32, line)))
+    case Replay{+n, +skip, bad, s, line, width}:
+      Replay.take(Nat.is_lt(n, skip), Nat.is_lt(Replay.width(), width), Nat.add(n, 1n), skip, bad, s, U.Utf8.decode(List.reverse(&2, U32, line)))
+
+# Keeps b only while the line is under the width, and counts it either way.
+def Replay.grow(fits: Bool, b: U32, line: List<&2, U32>) -> List<&2, U32>:
+  match fits:
+    case True{}:
+      b <> line
+    case False{}:
+      line
 
 def Replay.push(newline: Bool, b: U32, r: Replay) -> Replay:
   match newline:
@@ -933,8 +967,8 @@ def Replay.push(newline: Bool, b: U32, r: Replay) -> Replay:
       Replay.end(r)
     case False{}:
       match r:
-        case Replay{n, skip, bad, s, line}:
-          Replay{n, skip, bad, s, b <> line}
+        case Replay{n, skip, bad, s, line, +width}:
+          Replay{n, skip, bad, s, Replay.grow(Nat.is_lt(width, Replay.width()), b, line), Nat.add(width, 1n)}
 
 def Replay.feed.go(fuel: Nat, bs: List<&2, U32>, r: Replay) -> Replay:
   match fuel bs:
@@ -952,7 +986,7 @@ def Replay.feed(+bs: List<&2, U32>, r: Replay) -> Replay:
 # crash in the middle of a write leaves one.
 def Replay.torn(r: Replay) -> Bool:
   match r:
-    case Replay{n, skip, bad, s, line}:
+    case Replay{n, skip, bad, s, line, width}:
       Bool.not(List.is_empty(&2, U32, line))
 
 def Replay.cut(torn: Bool, r: Replay) -> Replay:
@@ -969,17 +1003,17 @@ def Replay.finish(+r: Replay) -> Replay:
 
 def Replay.lines(r: Replay) -> Nat:
   match r:
-    case Replay{n, skip, bad, s, line}:
+    case Replay{n, skip, bad, s, line, width}:
       n
 
 def Replay.bad(r: Replay) -> Nat:
   match r:
-    case Replay{n, skip, bad, s, line}:
+    case Replay{n, skip, bad, s, line, width}:
       bad
 
 def Replay.store(r: Replay) -> Store:
   match r:
-    case Replay{n, skip, bad, s, line}:
+    case Replay{n, skip, bad, s, line, width}:
       s
 
 def Change.line(c: Change) -> String:

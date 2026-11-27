@@ -135,7 +135,7 @@ export interface components {
             due: string;
         };
         /** @enum {string} */
-        UsState: "AL" | "AR" | "AZ" | "CA" | "CO" | "CT" | "DE" | "FL" | "GA" | "IA" | "ID" | "IL" | "IN" | "KS" | "KY" | "LA" | "MA" | "MD" | "ME" | "MI" | "MN" | "MO" | "MS" | "MT" | "NC" | "ND" | "NE" | "NH" | "NJ" | "NM" | "NV" | "NY" | "OH" | "OK" | "OR" | "PA" | "RI" | "SC" | "SD" | "TN" | "TX" | "UT" | "VA" | "VT" | "WA" | "WI" | "WV" | "WY";
+        UsState: "AL" | "AR" | "AZ" | "CA" | "CO" | "CT" | "DC" | "DE" | "FL" | "GA" | "IA" | "ID" | "IL" | "IN" | "KS" | "KY" | "LA" | "MA" | "MD" | "ME" | "MI" | "MN" | "MO" | "MS" | "MT" | "NC" | "ND" | "NE" | "NH" | "NJ" | "NM" | "NV" | "NY" | "OH" | "OK" | "OR" | "PA" | "RI" | "SC" | "SD" | "TN" | "TX" | "UT" | "VA" | "VT" | "WA" | "WI" | "WV" | "WY";
         Appraisal: {
             id: string;
             organization: string;
@@ -218,7 +218,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description An appraisal with this key was already requested, so nothing changed */
+            /** @description An appraisal with this key was already requested, so nothing changed and the rest of the body is ignored */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -272,7 +272,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The change could not be saved, so nothing changed and the request can be sent again */
+            /** @description The server couldn't finish the request, so nothing changed and the request can be sent again */
             "5XX": {
                 headers: {
                     [name: string]: unknown;
@@ -406,7 +406,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The change could not be saved, so nothing changed and the request can be sent again */
+            /** @description The server couldn't finish the request, so nothing changed and the request can be sent again */
             "5XX": {
                 headers: {
                     [name: string]: unknown;
@@ -475,7 +475,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The change could not be saved, so nothing changed and the request can be sent again */
+            /** @description The server couldn't finish the request, so nothing changed and the request can be sent again */
             "5XX": {
                 headers: {
                     [name: string]: unknown;
@@ -542,7 +542,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The change could not be saved, so nothing changed and the request can be sent again */
+            /** @description The server couldn't finish the request, so nothing changed and the request can be sent again */
             "5XX": {
                 headers: {
                     [name: string]: unknown;
@@ -609,7 +609,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The change could not be saved, so nothing changed and the request can be sent again */
+            /** @description The server couldn't finish the request, so nothing changed and the request can be sent again */
             "5XX": {
                 headers: {
                     [name: string]: unknown;
