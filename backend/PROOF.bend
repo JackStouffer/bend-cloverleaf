@@ -21,6 +21,7 @@ import ./web/api.bend as WA
 import ./proof/web.bend as PW
 import ./proof/store.bend as PSt
 import ./proof/auth.bend as PA
+import ./proof/keys.bend as PK
 import ./web/store.bend as WSt
 
 # Proves every law in LAWS.bend. The working lemmas live in proof/, and this file
@@ -238,6 +239,10 @@ def Laws.route_schemas_are_distinct(op):
       {==}
     case WA.Organize{n, i, k, h}:
       {==}
+    case WA.Rotate{f, k, h}:
+      {==}
+    case WA.Revoke{l, g}:
+      {==}
 
 def Laws.route_answers_are_free(op):
   match op:
@@ -250,6 +255,10 @@ def Laws.route_answers_are_free(op):
     case WA.Cancel{f}:
       {==}
     case WA.Organize{n, i, k, h}:
+      {==}
+    case WA.Rotate{f, k, h}:
+      {==}
+    case WA.Revoke{l, g}:
       {==}
 
 def Laws.handlers_stay_in_range(op):
@@ -284,6 +293,10 @@ def Laws.route_schemas_are_wellformed(op):
     case WA.Cancel{f}:
       {==}
     case WA.Organize{n, i, k, h}:
+      {==}
+    case WA.Rotate{f, k, h}:
+      {==}
+    case WA.Revoke{l, g}:
       {==}
 
 def Laws.error_schema_is_wellformed():
@@ -333,6 +346,10 @@ def Laws.writes_publish_not_saved(op, c, w):
     case WA.Cancel{f}:
       {==}
     case WA.Organize{n, i, k, h}:
+      {==}
+    case WA.Rotate{f, k, h}:
+      {==}
+    case WA.Revoke{l, g}:
       {==}
 
 def Laws.good_request_is_logged_open(d, id, p):
@@ -443,3 +460,81 @@ def Laws.logged_request_is_the_callers(id, d):
   match d:
     case WSt.Draft{o, k, a, z, st, due}:
       {==}
+
+def Laws.rotating_needs_the_admin():
+  {==}
+
+def Laws.revoking_needs_the_admin():
+  {==}
+
+def Laws.rotating_unknown_writes_nothing(k, h):
+  {==}
+
+def Laws.rotating_unknown_answers_404(k, h):
+  {==}
+
+def Laws.rotation_logs_only_the_hash(i, n, x, k, h):
+  {==}
+
+def Laws.rotation_answers_200(i, n, x, k, h):
+  {==}
+
+def Laws.rotation_answers_the_key(i, n, x, k, h):
+  {==}
+
+def Laws.revoking_is_logged(i, n, h, y):
+  {==}
+
+def Laws.revoking_answers_200(g, y):
+  {==}
+
+def Laws.revoking_answers_revoked(i, n, h, y):
+  {==}
+
+def Laws.revoking_inactive_writes_nothing(y):
+  {==}
+
+def Laws.revoking_again_answers_200(g):
+  {==}
+
+def Laws.revoking_unknown_answers_404():
+  {==}
+
+def Laws.rotation_finds_the_named_organization(ps, body, s, o, seed, g, k, h, e):
+  PK.rotate_found_is_named(ps, body, s, o, seed, g, k, h, e)
+
+def Laws.revoking_finds_the_named_organization(ps, body, s, o, seed, g, y, e):
+  PK.revoke_found_is_named(ps, body, s, o, seed, g, y, e)
+
+def Laws.rotated_key_signs_in(s, i, n, h, x, e):
+  PK.rekey_signs_in(WSt.Store.org(i, s), s, i, n, h, x, e)
+
+def Laws.rotated_key_signs_in_beside_the_admin(s, a, i, n, h, x, e, ne):
+  PK.rekey_beside_admin(WSt.Store.org(i, s), s, a, i, n, h, x, e, ne)
+
+def Laws.old_key_stops_working(s, i, n, h, k, admin, x, ex, ne, e):
+  PK.rekey_old_key(WSt.Store.org(i, s), s, i, n, h, k, admin, x, ex, ne, e)
+
+def Laws.revoked_key_signs_in_as_no_one(s, i, h, admin, e):
+  PK.revoked_no_one(s, i, h, admin, e)
+
+def Laws.rotation_keeps_other_keys(s, i, n, k, j, h, ne):
+  PK.rekey_keeps_others(WSt.Store.org(i, s), s, i, n, k, j, h, ne)
+
+def Laws.revoking_keeps_other_keys(s, i, j, h, ne):
+  PK.revoke_keeps_others(s, i, j, h, ne)
+
+def Laws.rotation_keeps_appraisals(s, g):
+  PK.rekey_keeps_recs(WSt.Store.org(WSt.Org.id(g), s), g, s)
+
+def Laws.revoking_keeps_appraisals(s, i):
+  PK.revoke_keeps_recs(s, i)
+
+def Laws.rotation_keeps_ids_fresh(s, g):
+  PK.rekey_keeps_made(WSt.Store.org(WSt.Org.id(g), s), g, s)
+
+def Laws.revoking_keeps_ids_fresh(s, i):
+  PK.revoke_keeps_made(s, i)
+
+def Laws.revoked_organization_stays_on_record(s, i, g, e):
+  PK.revoked_on_record(s, i, g, e)

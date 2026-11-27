@@ -77,9 +77,18 @@ curl --cacert data/tls.crt -H "Authorization: Bearer $CLOVERLEAF_ADMIN_KEY" \
   -d '{"name":"Acme Motors"}' https://localhost:8443/api/v1/organizations
 ```
 
-Without the admin key the web process still starts, and no one can add an organization. If the answer is lost, don't retry: a retry adds a second organization, and keys can't be revoked yet.
+Without the admin key the web process still starts, and no one can add an organization. If the answer is lost, don't retry: a retry adds a second organization.
 
-A store from before organizations doesn't carry over. Its appraisals are dropped and ids start again, so clear the old data with `docker compose down -v` when upgrading.
+The admin key can also give an organization a new key, which stops the old one, or revoke its key, which stops every key until it gets a new one. Its appraisals stay either way. Use the organization's id, like `o1`:
+
+```bash
+curl --cacert data/tls.crt -H "Authorization: Bearer $CLOVERLEAF_ADMIN_KEY" \
+  -X POST https://localhost:8443/api/v1/organizations/o1/key
+curl --cacert data/tls.crt -H "Authorization: Bearer $CLOVERLEAF_ADMIN_KEY" \
+  -X POST https://localhost:8443/api/v1/organizations/o1/revoke
+```
+
+A store from before organizations doesn't carry over. Its appraisals are dropped and ids start again, so clear the old data with `docker compose down -v` when upgrading. A store from before revoking carries over as it is.
 
 ## Repository layout
 

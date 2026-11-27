@@ -306,7 +306,7 @@ def snapshot.opened(o: Result<&1, &1, U32 & String, File>, head: String, +gs: Li
 def snapshot.write(newer: Bool, path: String, n: Nat, +store: St.Store) -> IO(Unit):
   match newer:
     case True{}:
-      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open(path, "w"), o => snapshot.opened(o, St.Snapshot.head(n, store), St.Store.orgs(store), St.Store.recs(store)))
+      IO.bind(Result<&1, &1, U32 & String, File>, Unit, File.open(path, "w"), o => snapshot.opened(o, St.Snapshot.head(n, store), List.append(&2, St.Org, St.Store.orgs(store), St.Store.retired(store)), St.Store.recs(store)))
     case False{}:
       IO.pure(Unit, Unit{})
 

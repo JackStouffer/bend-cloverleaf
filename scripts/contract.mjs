@@ -11,9 +11,10 @@
 // out with `docker compose cp nginx:/etc/nginx/certs/tls.crt data/tls.crt`.
 //
 // The admin key comes from CLOVERLEAF_ADMIN_KEY, or else from the repo's .env,
-// the file Compose gives the web process. The contract adds two organizations
-// with it each run. --keep writes one of their keys to the file it keeps, so
-// keep that file out of the repo, as data/ is.
+// the file Compose gives the web process. The contract adds three
+// organizations with it each run, and rotates and revokes the third one's key.
+// --keep writes their keys to the file it keeps, so keep that file out of the
+// repo, as data/ is.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { request } from "node:https";
@@ -55,6 +56,8 @@ export function keptProblem(kept) {
     typeof kept === "object" &&
     typeof kept.key === "string" &&
     typeof kept.other === "string" &&
+    Array.isArray(kept.revoked) &&
+    kept.revoked.every((k) => typeof k === "string") &&
     Array.isArray(kept.appraisals) &&
     kept.appraisals.every((a) => a !== null && typeof a === "object" && typeof a.id === "string");
   return ok ? undefined : "the keep file is from an older contract run: make it again with --keep";
@@ -268,7 +271,39 @@ export async function run(base, ca, keep, admin = adminKey()) {
   const mine = await call("GET", `/api/v1/appraisals/${theirs.json?.id}`, undefined, 200, b);
   same("B's appraisal is untouched", mine.json, theirs.json);
 
-  if (keep) writeFileSync(keep, JSON.stringify({ key: a, other: b, appraisals: [cancelled.json, second.json] }, null, 2) + "\n");
+  // A third organization gets a new key, loses it, then gets another. Only
+  // the admin can do either, and the newest key is the only one that works.
+  const orgC = await call("POST", "/api/v1/organizations", { name: `Contract ${run} C` }, 201, admin);
+  const cid = orgC.json?.id;
+  const c0 = orgC.json?.apiKey;
+  const cOwn = await call("POST", "/api/v1/appraisals", draft(`${run}-c`), 201, c0);
+  await call("POST", `/api/v1/organizations/${cid}/key`, undefined, 401);
+  await call("POST", `/api/v1/organizations/${cid}/key`, undefined, 403, c0);
+  await call("POST", "/api/v1/organizations/nope/key", undefined, 404, admin);
+  await call("GET", `/api/v1/organizations/${cid}/key`, undefined, 405, admin);
+  const rotated = await call("POST", `/api/v1/organizations/${cid}/key`, undefined, 200, admin);
+  const c1 = rotated.json?.apiKey;
+  same("rotating keeps the id and name", { id: rotated.json?.id, name: rotated.json?.name }, { id: cid, name: orgC.json?.name });
+  if (!/^clv_[0-9a-f]{64}$/.test(c1 ?? "") || c1 === c0) problems.push("a rotated key isn't a new clv_ key");
+  await call("GET", `/api/v1/appraisals/${cOwn.json?.id}`, undefined, 401, c0);
+  const cRead = await call("GET", `/api/v1/appraisals/${cOwn.json?.id}`, undefined, 200, c1);
+  same("the new key reads the organization's appraisal", cRead.json, cOwn.json);
+  await call("POST", `/api/v1/organizations/${cid}/revoke`, undefined, 403, b);
+  await call("POST", "/api/v1/organizations/nope/revoke", undefined, 404, admin);
+  const revoked = await call("POST", `/api/v1/organizations/${cid}/revoke`, undefined, 200, admin);
+  same("revoking answers the organization, revoked", revoked.json, { id: cid, name: orgC.json?.name, status: "revoked" });
+  const revokedAgain = await call("POST", `/api/v1/organizations/${cid}/revoke`, undefined, 200, admin);
+  same("revoking twice changes nothing", revokedAgain.json, revoked.json);
+  await call("GET", `/api/v1/appraisals/${cOwn.json?.id}`, undefined, 401, c1);
+  await call("GET", `/api/v1/appraisals/${id}`, undefined, 200, a);
+  const back = await call("POST", `/api/v1/organizations/${cid}/key`, undefined, 200, admin);
+  const c2 = back.json?.apiKey;
+  const cBack = await call("GET", `/api/v1/appraisals/${cOwn.json?.id}`, undefined, 200, c2);
+  same("a revoked organization's appraisals stay", cBack.json, cOwn.json);
+  await call("POST", `/api/v1/organizations/${cid}/revoke`, undefined, 200, admin);
+  await call("GET", `/api/v1/appraisals/${cOwn.json?.id}`, undefined, 401, c2);
+
+  if (keep) writeFileSync(keep, JSON.stringify({ key: a, other: b, revoked: [c0, c1, c2], appraisals: [cancelled.json, second.json] }, null, 2) + "\n");
   return { calls, problems };
 }
 
@@ -292,6 +327,11 @@ export async function recall(base, ca, file) {
     else if (res.text !== JSON.stringify(a)) problems.push(`${path}: ${res.text} != ${JSON.stringify(a)}`);
     const other = await get(path, kept.other);
     if (other.status !== 404) problems.push(`${path} with the other organization's key: expected 404, got ${other.status}`);
+  }
+  for (const k of kept.revoked) {
+    const res = await send(base, ca, "POST", "/api/v1/appraisals", JSON.stringify(draft(randomUUID().slice(0, 8))), k);
+    calls += 1;
+    if (res.status !== 401) problems.push(`a revoked or replaced key after the restart: expected 401, got ${res.status}`);
   }
   const fresh = await send(base, ca, "POST", "/api/v1/appraisals", JSON.stringify(draft(randomUUID().slice(0, 8))), kept.key);
   calls += 1;

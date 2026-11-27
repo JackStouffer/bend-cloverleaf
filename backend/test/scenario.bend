@@ -911,9 +911,10 @@ def web.orglines(gs: List<&2, St.Org>) -> String:
     case Con{g, rest}:
       St.Org.line(g) ++ web.orglines(rest)
 
-# The lines after a snapshot's head: its organizations, then its appraisals.
+# The lines after a snapshot's head: its active organizations, its revoked
+# ones, then its appraisals.
 def web.body(+s: St.Store) -> String:
-  web.orglines(St.Store.orgs(s)) ++ web.lines(St.Store.recs(s))
+  web.orglines(St.Store.orgs(s)) ++ web.orglines(St.Store.retired(s)) ++ web.lines(St.Store.recs(s))
 
 # A snapshot's text, the way the shell writes it a line at a time.
 def web.snaptext(n: Nat, +s: St.Store) -> String:
@@ -1024,6 +1025,67 @@ def web.key.is(m: Maybe<&2, String>, s: String) -> Bool:
 def web.admin.is(m: Maybe<&2, String>) -> Bool:
   Maybe.is_some(&2, String, m)
 
+# Rotating and revoking keys. Rotation gives the key Key.of makes from
+# web.seed().
+def web.rotate.as(auth: String, id: String) -> String:
+  web.post.as(auth, "/api/v1/organizations/" ++ id ++ "/key", "")
+
+def web.rotate(id: String) -> String:
+  web.rotate.as(web.bearer(web.admin_key()), id)
+
+def web.revoke.as(auth: String, id: String) -> String:
+  web.post.as(auth, "/api/v1/organizations/" ++ id ++ "/revoke", "")
+
+def web.revoke(id: String) -> String:
+  web.revoke.as(web.bearer(web.admin_key()), id)
+
+def web.org_not_found() -> String:
+  "{\"error\":\"not_found\",\"detail\":\"No organization has this id\"}"
+
+def web.org_revoked() -> String:
+  "{\"id\":\"o1\",\"name\":\"Acme Appraisals\",\"status\":\"revoked\"}"
+
+# a1 and a2, then o1's key rotated.
+def web.rotated() -> St.Store:
+  web.run([web.rotate("o1")], web.two())
+
+# a1 and a2, then o1's key revoked.
+def web.revoked() -> St.Store:
+  web.run([web.revoke("o1")], web.two())
+
+# The change rotating o1's key logs keeps o1, its name and the hash of the new
+# key, and never the key itself.
+def web.logged.rekey(m: Maybe<&2, St.Change>) -> Bool:
+  match m:
+    case Some{St.Rekeyed{St.Org{i, n, +h}}}:
+      WJ.Text.same(i, "o1") && WJ.Text.same(n, "Acme Appraisals") && WJ.Text.same(h, WH.Sha.text(web.seeded())) && Bool.not(WJ.Text.same(h, web.seeded()))
+    case other:
+      False{}
+
+def web.logged.revoke(m: Maybe<&2, St.Change>) -> Bool:
+  match m:
+    case Some{St.Revoked{i}}:
+      WJ.Text.same(i, "o1")
+    case other:
+      False{}
+
+# A snapshot of web.revoked() reads back with o1 revoked, o2 active and both
+# appraisals.
+def web.snap.revoked(m: Maybe<&2, St.Snap>) -> Bool:
+  match m:
+    case Some{St.Snap{n, +s}}:
+      Nat.is_eq(List.length(&2, St.Org, St.Store.orgs(s)), 1n) && Nat.is_eq(List.length(&2, St.Org, St.Store.retired(s)), 1n)
+        && Bool.not(web.holds(s, "o1", web.key1())) && web.holds(s, "o2", web.key2()) && web.found(s, "a1") && Nat.is_eq(St.Store.made(s), 2n)
+    case None{}:
+      False{}
+
+# A log that revokes o1's key, then gives it web.seeded() as a new one.
+def web.keylog() -> String:
+  "{\"revoked\":\"o1\"}\n{\"rekeyed\":{\"id\":\"o1\",\"name\":\"Acme Appraisals\",\"keyHash\":\"" ++ WH.Sha.text(web.seeded()) ++ "\"}}\n"
+
+def web.keylog.store() -> St.Store:
+  St.Replay.store(St.Replay.finish(St.Replay.feed(web.ascii(web.keylog()), St.Replay.start(0n, web.two()))))
+
 def web_checks() -> List<&2, Check>:
   [Check{"GET /api/health answers 200 with its body", web.is("GET /api/health HTTP/1.1\r\nHost: localhost\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
    Check{"a query string doesn't change the route", web.is("GET /api/health?verbose=1 HTTP/1.1\r\n\r\n", web.head("200 OK", "15", "") ++ "{\"status\":\"ok\"}")},
@@ -1118,9 +1180,37 @@ def web_checks() -> List<&2, Check>:
    Check{"another organization's appraisal can't be cancelled", Bool.and(web.answers(web.two(), web.cancel.as(web.bearer(web.key2()), "a1"), "404 Not Found", web.not_found()), Bool.not(web.writes(web.two(), web.cancel.as(web.bearer(web.key2()), "a1"))))},
    Check{"two organizations can use the same idempotency key", web.answers(web.two(), web.create.as(web.bearer(web.key2()), "k1"), "201 Created", web.rec.of("a3", "o2", "k1", "open"))},
    Check{"a repeated key still finds the caller's own appraisal", web.answers(web.store([web.create("k1"), web.create.as(web.bearer(web.key2()), "k1")]), web.create("k1"), "200 OK", web.rec("a1", "k1", "open"))},
-   Check{"only a request to add an organization reads random bytes", Bool.and(WA.Api.needs_seed(web.organize("Cedar")), Bool.and(Bool.not(WA.Api.needs_seed(web.create("k1"))), Bool.and(Bool.not(WA.Api.needs_seed(web.get("/api/v1/appraisals/a1"))), Bool.not(WA.Api.needs_seed("GET /api/health HTTP/1.1\r\n\r\n")))))},
+   Check{"of the other routes, only adding an organization reads random bytes", Bool.and(WA.Api.needs_seed(web.organize("Cedar")), Bool.and(Bool.not(WA.Api.needs_seed(web.create("k1"))), Bool.and(Bool.not(WA.Api.needs_seed(web.get("/api/v1/appraisals/a1"))), Bool.not(WA.Api.needs_seed("GET /api/health HTTP/1.1\r\n\r\n")))))},
    Check{"a request with empty lines before it is still seen as adding an organization", WA.Api.needs_seed("\r\n" ++ web.organize("Cedar"))},
    Check{"the spec is OpenAPI 3.1", String.starts_with(WO.Spec.text(), "{\n  \"openapi\": \"3.1.0\",")}]
+
+# Rotating and revoking keys, in a list of their own: one list literal this
+# long trips the compiler.
+def key_checks() -> List<&2, Check>:
+  [Check{"rotating a key answers 200 with the organization and its new key", web.answers(web.two(), web.rotate("o1"), "200 OK", "{\"id\":\"o1\",\"name\":\"Acme Appraisals\",\"apiKey\":\"" ++ web.seeded() ++ "\"}")},
+   Check{"the log keeps the rotated key's hash, never the key", web.logged.rekey(WA.Handled.change(web.handle(web.rotate("o1"), web.two())))},
+   Check{"after rotating, the new key signs in as the organization", web.answers(web.rotated(), web.get.as(web.bearer(web.seeded()), "/api/v1/appraisals/a1"), "200 OK", web.rec("a1", "k1", "open"))},
+   Check{"after rotating, the old key is 401", web.unauthorized(web.rotated(), web.get.as(web.bearer(web.key1()), "/api/v1/appraisals/a1"))},
+   Check{"rotating one organization's key leaves the others working", web.answers(web.rotated(), web.create.as(web.bearer(web.key2()), "k9"), "201 Created", web.rec.of("a3", "o2", "k9", "open"))},
+   Check{"rotating an unknown organization is 404 and writes nothing", Bool.and(web.answers(web.two(), web.rotate("o9"), "404 Not Found", web.org_not_found()), Bool.not(web.writes(web.two(), web.rotate("o9"))))},
+   Check{"a dealer key can't rotate a key", web.forbidden(web.two(), web.rotate.as(web.bearer(web.key1()), "o1"))},
+   Check{"rotating with no key is 401", web.unauthorized(web.two(), web.rotate.as("", "o1"))},
+   Check{"with no random bytes, rotating is 500 and writes nothing", Bool.and(WJ.Text.same(WA.Handled.response(WA.Api.handle(web.rotate("o1"), web.two(), web.admin(), [])), web.head("500 Internal Server Error", "22", "") ++ "{\"error\":\"no_entropy\"}"), Bool.not(Maybe.is_some(&2, St.Change, WA.Handled.change(WA.Api.handle(web.rotate("o1"), web.two(), web.admin(), [])))))},
+   Check{"a request to rotate a key reads random bytes, and one to revoke doesn't", Bool.and(WA.Api.needs_seed(web.rotate("o1")), Bool.not(WA.Api.needs_seed(web.revoke("o1"))))},
+   Check{"revoking a key answers 200 with the organization, revoked", web.answers(web.two(), web.revoke("o1"), "200 OK", web.org_revoked())},
+   Check{"the log records the revoke", web.logged.revoke(WA.Handled.change(web.handle(web.revoke("o1"), web.two())))},
+   Check{"after revoking, the key is 401", web.unauthorized(web.revoked(), web.get.as(web.bearer(web.key1()), "/api/v1/appraisals/a1"))},
+   Check{"revoking keeps the organization's appraisals and the others' keys", Bool.and(Bool.and(web.found(web.revoked(), "a1"), web.found(web.revoked(), "a2")), web.answers(web.revoked(), web.create.as(web.bearer(web.key2()), "k9"), "201 Created", web.rec.of("a3", "o2", "k9", "open")))},
+   Check{"revoking twice answers 200 and writes nothing", Bool.and(web.answers(web.revoked(), web.revoke("o1"), "200 OK", web.org_revoked()), Bool.not(web.writes(web.revoked(), web.revoke("o1"))))},
+   Check{"revoking an unknown organization is 404 and writes nothing", Bool.and(web.answers(web.two(), web.revoke("o9"), "404 Not Found", web.org_not_found()), Bool.not(web.writes(web.two(), web.revoke("o9"))))},
+   Check{"a dealer key can't revoke a key, even its own", web.forbidden(web.two(), web.revoke.as(web.bearer(web.key1()), "o1"))},
+   Check{"a revoked organization's id isn't reused", web.answers(web.revoked(), web.organize("Cedar"), "201 Created", "{\"id\":\"o3\",\"name\":\"Cedar\",\"apiKey\":\"" ++ web.seeded() ++ "\"}")},
+   Check{"rotating a revoked organization's key makes it active again", web.answers(web.run([web.rotate("o1")], web.revoked()), web.get.as(web.bearer(web.seeded()), "/api/v1/appraisals/a1"), "200 OK", web.rec("a1", "k1", "open"))},
+   Check{"a snapshot with a revoked organization reads back", web.snap.revoked(web.load(web.snaptext(9n, web.revoked())))},
+   Check{"a snapshot missing a revoked organization doesn't load", Bool.not(web.loads(St.Snapshot.head(9n, web.revoked()) ++ web.orglines(St.Store.orgs(web.revoked())) ++ web.lines(St.Store.recs(web.revoked()))))},
+   Check{"a snapshot head from before revoking doesn't load, so the log replays whole", Bool.not(web.loads("{\"events\":0,\"count\":0,\"appraisals\":0,\"made\":0,\"organizations\":0}\n"))},
+   Check{"replaying a revoke and a new key signs in with the new key only", Bool.and(web.holds(web.keylog.store(), "o1", web.seeded()), Bool.not(web.holds(web.keylog.store(), "o1", web.key1())))},
+   Check{"GET on a key route is 405 with Allow", web.is("GET /api/v1/organizations/o1/key HTTP/1.1\r\n\r\n", web.head("405 Method Not Allowed", "30", "Allow: POST\r\n") ++ "{\"error\":\"method_not_allowed\"}")}]
 
 def show(c: Check) -> String:
   match c:
@@ -1153,5 +1243,5 @@ def finish(n: Nat) -> IO(Unit):
       IO.die(Unit, 1, Nat.show(n) ++ " scenarios failed")
 
 def main() -> IO(Unit):
-  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, load_checks(), List.append(&2, Check, nation_checks(), List.append(&2, Check, base_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), List.append(&2, Check, road_checks(), web_checks()))))))))
+  +all = List.append(&2, Check, geo_checks(), List.append(&2, Check, times_checks(), List.append(&2, Check, load_checks(), List.append(&2, Check, nation_checks(), List.append(&2, Check, base_checks(), List.append(&2, Check, solve_checks(), List.append(&2, Check, heal_checks(), List.append(&2, Check, road_checks(), List.append(&2, Check, web_checks(), key_checks())))))))))
   IO.bind(Unit, Unit, print_all(all), u => finish(failed(all)))
